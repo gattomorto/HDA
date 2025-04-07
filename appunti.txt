@@ -27,12 +27,46 @@ that have been recently accessed by the process.
 Windows prioritizes keeping this memory in RAM because it's actively being used.
 This metric helps identify which processes are truly "active" in terms of
 memory usage.
+*Quando fai malloc, questa non cresce, ma cresce commited-- solo quando tocchi,
+cresce.
+*Nota che è working set, dunque è in ram
+*Private working set is the paged-in, or "resident", subset of Private Bytes.
 
 WORKING SET
 *Working Set = Private Working Set + Shared Working Set
 *These pages are not necessarily committed by the process;
-they are backed by files (not the pagefile), so they don’t consume commit charge.
 (ecco perchè working set puo essere maggiore di commit)
+*the memory is accessible by the processor with no page fault exception.
+Simply put, the memory is in RAM (physical memory).
+*Memory in the Working Set is "physical" in the sense that it can be
+addressed without a page fault; however, the standby page list is also
+still physically in memory but not reported in the Working Set,
+and this is why you might see the "Mem Usage" suddenly drop when you
+minimize an application.
+*A working set is a subset of virtual pages resident in physical memory.
+*In essence, a working set is used to decide how much physical memory can be
+used to avoid a lot of paging. When a page fault occurs, the limits of the
+working set and the amount of free memory on the system are examined.
+If necessary, the memory manager allows a process to grow to its working set
+maximum. If memory is tight, Windows will replace pages in a working set
+when a page fault occurs.
 
-COMMIT (PRIVATE BYTES)?
+COMMIT (PRIVATE BYTES)x2
 *Commit Size only counts private allocations.
+*Commit Size is the correct column to look at when trying to ascertain memory
+consumption in processes. The sad thing is that it’s not the default column
+shown, and that’s why many people use the misleading active private working
+set column.(web)
+*Private WS should always be lower than or equal to Private Bytes (web)
+*Private Bytes refer to the amount of memory that the process executable has
+asked for - not necessarily the amount it is actually using.
+They are "private" because they (usually) exclude memory-mapped files
+(i.e. shared DLLs). But - here's the catch - they don't necessarily exclude
+memory allocated by those files (hared libraries can allocate memory inside
+your application module). There is no way to tell whether a change
+in private bytes was due to the executable itself, or due to a linked library.(web)
+*Private Bytes are a reasonable approximation of the amount of memory
+your executable is using and can be used to help narrow down a list
+of potential candidates for a memory leak; if you see the number growing and
+growing constantly and endlessly, you would want to check that process
+for a leak. This cannot, however, prove that there is or is not a leak.

@@ -1,5 +1,6 @@
 import os
 import sys
+from guppy import hpy
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -101,6 +102,8 @@ def train_model(network_model, X_train, Y_train, X_test, Y_test,
             print(f"  Private Memory: {metrics[10]:.2f} MB")
             print(f"  Unique Set Size: {metrics[11]:.2f} MB")
             print("-" * 50)
+
+
 
 
 
