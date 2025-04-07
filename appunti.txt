@@ -1,0 +1,38 @@
+Modify your train_model function:
+Replace the manual training loop with model.fit() to leverage built-in TensorBoard integration.
+Alternatively, keep your loop but add manual profiling
+
+https://www.tensorflow.org/guide/data_performance
+
+Data preprocessing: you may increase num_parallel_calls in Dataset map() or preprocess the data OFFLINE.
+
+Reading data from files in advance: you may tune parameters in the following tf.data API (prefetch size, interleave cycle_length, reader buffer_size)
+
+https://www.tensorflow.org/guide/profiler (leggi best practices)
+
+But what tells the loop to exit? And where do we call the code being monitored? We do that in a separate thread.
+
+tracemalloc is really awesome, but unfortunately it only accounts for memory allocated by python, so if you have some c/c++ extension that does it own allocations, tracemalloc won't report it
+
+If you only want to look at the memory usage of an object.
+from pympler import asizeof
+asizeof.asizeof(my_object)
+
+
+
+
+ACTIVE PRIVATE WORKING SET
+*This is a subset of the private working set that represents memory pages
+that have been recently accessed by the process.
+Windows prioritizes keeping this memory in RAM because it's actively being used.
+This metric helps identify which processes are truly "active" in terms of
+memory usage.
+
+WORKING SET
+*Working Set = Private Working Set + Shared Working Set
+*These pages are not necessarily committed by the process;
+they are backed by files (not the pagefile), so they don’t consume commit charge.
+(ecco perchè working set puo essere maggiore di commit)
+
+COMMIT (PRIVATE BYTES)?
+*Commit Size only counts private allocations.
