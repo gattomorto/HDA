@@ -71,15 +71,4 @@ of potential candidates for a memory leak; if you see the number growing and
 growing constantly and endlessly, you would want to check that process
 for a leak. This cannot, however, prove that there is or is not a leak.
 
-  RSS: 1157.06 MB
-  VMS: 1798.86 MB
-  Peak Working Set: 1258.23 MB
-  Working Set: 1157.06 MB
-  Peak Paged Pool: 2.42 MB
-  Paged Pool: 2.42 MB
-  Peak Non-Paged Pool: 0.06 MB
-  Non-Paged Pool: 0.06 MB
-  Pagefile Commit: 1798.86 MB
-  Peak Pagefile Commit: 1900.38 MB
-  Private Memory: 1798.86 MB
-  Unique Set Size: 1065.75 MB
+keras tuner (per ottimizzare)
