@@ -36,8 +36,6 @@ def compute_cost(outp, Y):
 def train_model(network_model, X_train, Y_train, X_test, Y_test,
                 learning_rate = 0.005, num_epochs = 300, minibatch_size = 128,
                 print_cost = True):
-
-
     seed = 3
     (m, n_H0, n_W0, n_C0) = X_train.shape
     n_y = Y_train.shape[1]
@@ -144,8 +142,53 @@ def train_model(network_model, X_train, Y_train, X_test, Y_test,
 
     return network_model
 
-if __name__ == '__main__':
 
+class RecomputeWrapper(tf.keras.Model):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def call(self, inputs):
+        return tf.recompute_grad(self.model)(inputs)
+
+
+class CheckpointedModel(tf.keras.Model):
+    def __init__(self):
+        super().__init__()
+        # Conv Block 1 (with checkpointing)
+        self.conv1 = tf.recompute_grad(tf.keras.layers.Conv2D(4, (3, 3), strides=(1, 1), padding='same'))
+        self.bn1 = tf.keras.layers.BatchNormalization(axis=-1)
+        self.pool1 = tf.keras.layers.MaxPool2D((2, 2), strides=(2, 2), padding='same')
+
+        # Conv Block 2 (with checkpointing)
+        self.conv2 = tf.recompute_grad(tf.keras.layers.Conv2D(8, (3, 3), strides=(1, 1), padding='same'))
+        self.bn2 = tf.keras.layers.BatchNormalization(axis=-1)
+
+        # Dense layers (with checkpointing)
+        self.flatten = tf.keras.layers.Flatten()
+        self.dense1 = tf.recompute_grad(tf.keras.layers.Dense(16))
+        self.dense_out = tf.keras.layers.Dense(6)  # Output layer doesn't need checkpointing
+
+    def call(self, inputs, training=False):
+        # Block 1
+        x = self.conv1(inputs)
+        x = self.bn1(x, training=training)
+        x = tf.nn.relu(x)
+        x = self.pool1(x)
+
+        # Block 2
+        x = self.conv2(x)
+        x = self.bn2(x, training=training)
+        x = tf.nn.relu(x)
+        x = self.pool1(x)  # Reusing same pooling
+
+        # Dense layers
+        x = self.flatten(x)
+        x = self.dense1(x)
+        x = tf.nn.relu(x)
+        return self.dense_out(x)
+
+def main():
     X_train_orig, Y_train_orig, X_test_orig, Y_test_orig, classes = load_dataset()
 
     print(f"Array size: {X_train_orig.nbytes/ (1024 * 1024):.2f} MB")
@@ -177,15 +220,9 @@ if __name__ == '__main__':
          tf.keras.layers.Dense(16, activation='relu'),
          tf.keras.layers.Dense(6, activation=None)])
 
-    #train_model(network_model, X_train, Y_train, X_test, Y_test, minibatch_size = 64,num_epochs=5,learning_rate= 0.001)
-
-    mem_usage = memory_usage((train_model,
-                              (network_model, X_train, Y_train, X_test, Y_test),
-                              {'learning_rate': 0.001, 'num_epochs': 5, 'minibatch_size': 64}))
-    peak_mem = max(mem_usage)
-    print(f"Peak memory usage: {peak_mem} MiB")
-    plt.figure(figsize=(10, 6))
-    plt.plot(mem_usage)
-    plt.show()
+    #network_model = RecomputeWrapper(network_model)
+    network_model = CheckpointedModel()
+    train_model(network_model, X_train, Y_train, X_test, Y_test, minibatch_size = 1000,num_epochs=5,learning_rate= 0.001)
 
 
+main()
