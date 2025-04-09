@@ -72,3 +72,34 @@ growing constantly and endlessly, you would want to check that process
 for a leak. This cannot, however, prove that there is or is not a leak.
 
 keras tuner (per ottimizzare)
+
+Second, the optimizer and gradients. Depends on the optimizer too: if you're using momentum, you need to store that for
+each weight, so it'll be about the same memory usage as the weights.
+
+As shown by your model.summary(), the output size of this layer is (None, 1751, 480, 1024). For a single image, this is a total of 1751*480*1024 pixels. As your image is likely in float32, each pixel takes 4 bytes to store. So the output of this layer requires 1751*480*1024*4 bytes, which is around 3.2 GB per image just for this layer.
+If you were to change the number of filters to, say, 64, you would only need around 200 MB per image.
+
+Most critical though for images and high resolution data are the intermediate activations during training.
+The frameworks must save the activations after each later to reuse when doing the backwards pass and computing
+gradients. If you have a really deep network, or really high resolution images, or a whole lot of
+channels/filters per layer, then the activations are your dominant memory usage
+
+For inference or when finetuning models, freezing certain layers can help reduce memory requirements. Pruning, on
+the other hand, removes parts of the model that contribute less to the overall output, reducing the number of
+parameters and saving memory.
+# Freezing layers
+for param in model.layer1.parameters():
+    param.requires_grad = False  # Freeze layer1 of ResNet
+# Pruning a layer (example using torch.nn.utils.prune)
+import torch.nn.utils.prune as prune
+prune.l1_unstructured(model.layer2[0], name="weight", amount=0.3)  # Prune 30% of weights in layer2
+
+multicore training?
+
+
+Leverage garbage collection by explicitly deleting large tensors and running gc.collect() to free memory.
+
+convertire in graph
+
+https://youtu.be/_expOfB4CYg?t=2953
+

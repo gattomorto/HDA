@@ -10,11 +10,15 @@ from cnn_utils import *
 from memory_profiler import profile
 from memory_profiler import memory_usage
 
+from tensorflow.keras import mixed_precision
+#mixed_precision.set_global_policy('mixed_float16')
 
-def mem_usage():
+
+
+def mem_usage(printt = False):
     mem_info = psutil.Process().memory_full_info()  # Retrieve memory full info
     # Return the tuple with all metrics except for `num_page_faults`
-    return (
+    mem= (
         mem_info.rss / (1024 * 1024),  # Resident Set Size (in MB)
         mem_info.vms / (1024 * 1024),  # Virtual Memory Size (in MB)
         mem_info.peak_wset / (1024 * 1024),  # Peak Working Set (in MB)
@@ -28,6 +32,22 @@ def mem_usage():
         mem_info.private / (1024 * 1024),  # Private Memory (in MB)
         mem_info.uss / (1024 * 1024)  # Unique Set Size (in MB)
     )
+    if printt:
+        print(f"  RSS: {mem[0]:.2f} MB")
+        print(f"  VMS: {mem[1]:.2f} MB")
+        print(f"  Peak Working Set: {mem[2]:.2f} MB")
+        print(f"  Working Set: {mem[3]:.2f} MB")
+        print(f"  Peak Paged Pool: {mem[4]:.2f} MB")
+        print(f"  Paged Pool: {mem[5]:.2f} MB")
+        print(f"  Peak Non-Paged Pool: {mem[6]:.2f} MB")
+        print(f"  Non-Paged Pool: {mem[7]:.2f} MB")
+        print(f"  Pagefile Commit: {mem[8]:.2f} MB")
+        print(f"  Peak Pagefile Commit: {mem[9]:.2f} MB")
+        print(f"  Private Memory: {mem[10]:.2f} MB")
+        print(f"  Unique Set Size: {mem[11]:.2f} MB")
+        print("-" * 50)
+
+    return mem
 
 def compute_cost(outp, Y):
     cost = tf.reduce_mean(tf.keras.losses.categorical_crossentropy(y_pred= outp, y_true = Y, from_logits=True))
@@ -73,7 +93,7 @@ def train_model(network_model, X_train, Y_train, X_test, Y_test,
             optimizer.apply_gradients(zip(gradients, network_model.trainable_variables))
             minibatch_cost += cost / num_minibatches
 
-            metrics = mem_usage()
+            metrics = mem_usage(printt=False)
             rss_values.append(metrics[0])
             vms_values.append(metrics[1])
             peak_wset_values.append(metrics[2])
@@ -87,7 +107,7 @@ def train_model(network_model, X_train, Y_train, X_test, Y_test,
             private_values.append(metrics[10])
             uss_values.append(metrics[11])
 
-            print(f"  RSS: {metrics[0]:.2f} MB")
+            '''print(f"  RSS: {metrics[0]:.2f} MB")
             print(f"  VMS: {metrics[1]:.2f} MB")
             print(f"  Peak Working Set: {metrics[2]:.2f} MB")
             print(f"  Working Set: {metrics[3]:.2f} MB")
@@ -99,18 +119,18 @@ def train_model(network_model, X_train, Y_train, X_test, Y_test,
             print(f"  Peak Pagefile Commit: {metrics[9]:.2f} MB")
             print(f"  Private Memory: {metrics[10]:.2f} MB")
             print(f"  Unique Set Size: {metrics[11]:.2f} MB")
-            print("-" * 50)
+            print("-" * 50)'''
 
 
 
 
 
-        '''# Print the cost every epoch
-        if print_cost == True and epoch % 5 == 0:
-            pass
-            #print ("Cost after epoch %i: %f" % (epoch, minibatch_cost))
+        # Print the cost every epoch
         if print_cost == True and epoch % 1 == 0:
-            costs.append(minibatch_cost)'''
+            #pass
+            print ("Cost after epoch %i: %f" % (epoch, minibatch_cost))
+        if print_cost == True and epoch % 1 == 0:
+            costs.append(minibatch_cost)
 
 
     # Calculate accuracy on the validation set
@@ -143,50 +163,62 @@ def train_model(network_model, X_train, Y_train, X_test, Y_test,
     return network_model
 
 
-class RecomputeWrapper(tf.keras.Model):
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-
-    def call(self, inputs):
-        return tf.recompute_grad(self.model)(inputs)
 
 
-class CheckpointedModel(tf.keras.Model):
-    def __init__(self):
-        super().__init__()
-        # Conv Block 1 (with checkpointing)
-        self.conv1 = tf.recompute_grad(tf.keras.layers.Conv2D(4, (3, 3), strides=(1, 1), padding='same'))
-        self.bn1 = tf.keras.layers.BatchNormalization(axis=-1)
-        self.pool1 = tf.keras.layers.MaxPool2D((2, 2), strides=(2, 2), padding='same')
+class CustomCNN(tf.keras.Model):
+    def __init__(self, input_shape, num_classes=6, num_conv_blocks=2, num_dense_layers=1, base_filters=4, grad_chek = False):
+        super(CustomCNN, self).__init__()
 
-        # Conv Block 2 (with checkpointing)
-        self.conv2 = tf.recompute_grad(tf.keras.layers.Conv2D(8, (3, 3), strides=(1, 1), padding='same'))
-        self.bn2 = tf.keras.layers.BatchNormalization(axis=-1)
+        self.conv_blocks = []
+        for i in range(num_conv_blocks):
+            filters = base_filters * (2 ** i)
+            if grad_chek:
+                self.conv_blocks.append([
+                    tf.recompute_grad(tf.keras.layers.Conv2D(filters, (3, 3), padding='same', activation=None)),
+                    tf.recompute_grad(tf.keras.layers.BatchNormalization()),
+                    tf.recompute_grad(tf.keras.layers.Activation('relu')),
+                    tf.recompute_grad(tf.keras.layers.MaxPool2D((2, 2), padding='same'))
+                ])
+            else:
+                self.conv_blocks.append([
+                    tf.keras.layers.Conv2D(filters, (3, 3), padding='same', activation=None),
+                    tf.keras.layers.BatchNormalization(),
+                    tf.keras.layers.Activation('relu'),
+                    tf.keras.layers.MaxPool2D((2, 2), padding='same')
+                ])
 
-        # Dense layers (with checkpointing)
         self.flatten = tf.keras.layers.Flatten()
-        self.dense1 = tf.recompute_grad(tf.keras.layers.Dense(16))
-        self.dense_out = tf.keras.layers.Dense(6)  # Output layer doesn't need checkpointing
+
+        if grad_chek:
+            self.dense_layers = [tf.recompute_grad(tf.keras.layers.Dense(64, activation='relu')) for _ in range(num_dense_layers)]
+            #self.output_layer = tf.recompute_grad(tf.keras.layers.Dense(num_classes, activation=None))
+
+        else:
+            self.dense_layers = [tf.keras.layers.Dense(64, activation='relu') for _ in range(num_dense_layers)]
+            self.output_layer = tf.keras.layers.Dense(num_classes, activation=None)
+
+        self.output_layer = tf.keras.layers.Dense(num_classes, activation=None)
 
     def call(self, inputs, training=False):
-        # Block 1
-        x = self.conv1(inputs)
-        x = self.bn1(x, training=training)
-        x = tf.nn.relu(x)
-        x = self.pool1(x)
+        x = inputs
+        for block in self.conv_blocks:
+            for layer in block:
+                if isinstance(layer, tf.keras.layers.BatchNormalization):
+                    x = layer(x, training=training)  # Important: pass training flag
+                else:
+                    x = layer(x)
 
-        # Block 2
-        x = self.conv2(x)
-        x = self.bn2(x, training=training)
-        x = tf.nn.relu(x)
-        x = self.pool1(x)  # Reusing same pooling
-
-        # Dense layers
         x = self.flatten(x)
-        x = self.dense1(x)
-        x = tf.nn.relu(x)
-        return self.dense_out(x)
+
+        for dense in self.dense_layers:
+            x = dense(x)
+
+        return self.output_layer(x)
+
+
+
+
+
 
 def main():
     X_train_orig, Y_train_orig, X_test_orig, Y_test_orig, classes = load_dataset()
@@ -220,9 +252,15 @@ def main():
          tf.keras.layers.Dense(16, activation='relu'),
          tf.keras.layers.Dense(6, activation=None)])
 
-    #network_model = RecomputeWrapper(network_model)
-    network_model = CheckpointedModel()
-    train_model(network_model, X_train, Y_train, X_test, Y_test, minibatch_size = 1000,num_epochs=5,learning_rate= 0.001)
+
+    input_shape = X_train.shape[1:]
+    network_model = CustomCNN(input_shape, num_classes=6, num_conv_blocks=11, num_dense_layers=1,grad_chek=False)
+    #network_model.build(input_shape=(None, *input_shape))  # Needed to initialize weights
+
+
+    #network_model = CheckpointedModel()
+    train_model(network_model, X_train, Y_train, X_test, Y_test, minibatch_size = 128,num_epochs=5,learning_rate= 0.001)
+    mem_usage(printt=False)
 
 
 main()
