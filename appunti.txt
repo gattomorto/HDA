@@ -103,3 +103,96 @@ convertire in graph
 
 https://youtu.be/_expOfB4CYg?t=2953
 
+model pruning:
+import tensorflow_model_optimization as tfmot
+pruning_schedule = tfmot.sparsity.keras.PolynomialDecay(...)
+model_pruned = tfmot.sparsity.keras.prune_low_magnitude(model, pruning_schedule)
+
+Note: It is not recommended to set this to "float16" for training, as this will likely cause numeric stability
+issues. Instead, mixed precision, which leverages a mix of float16 and float32. It can be configured
+by calling keras.mixed_precision.set_dtype_policy('mixed_float16'). (documentazione ufficiale)
+
+Beware though if you try this API on CPU, as mixed precision is expected to run significantly slower on
+such devices.
+(a) In old GPU architectures and on most CPUs, FP16 numbers are treated as FP32, which requires casting to
+FP32 before computations and recast back to FP16 after. This makes more operations than for FP32 numbers,
+which explains why mixed precision is not preferable in such cases. This also means that if your GPU is
+really old, you might also experience slower training when using mixed precision.
+
+https://docs.openvino.ai/2025/index.html
+
+policy_name = "mixed_float16"  # if you train on a GPU
+policy_name = "mixed_bfloat16"  # if you train on a TPU
+# With recent Tensorflow versions (>= 2.4)
+policy = tf.keras.mixed_precision.Policy("mixed_float16")
+tf.keras.mixed_precision.set_policy(policy)
+# Before Tensorflow 2.4
+policy = tf.keras.mixed_precision.experimental.Policy("mixed_float16")
+tf.keras.mixed_precision.experimental.set_policy(policy)
+optimizer = Adam(**your_parameters)
+# For Tensorflow <2.4
+scaled_optimizer = tf.keras.mixed_precision.experimental.LossScaleOptimizer(optimizer, "dynamic")
+# For Tensorflow >=2.4
+scaled_optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer, "dynamic")
+
+nel caso non ti dovessi ricordare--   #tf.keras.backend.set_floatx('float16') riduceva la memoria di molto
+ma visto che dovrà emulare
+
+
+
+  #tf.keras.backend.set_floatx('float16')
+  RSS: 930.86 MB
+  VMS: 1281.17 MB
+  Peak Working Set: 930.86 MB
+  Working Set: 930.86 MB
+  Peak Paged Pool: 2.40 MB
+  Paged Pool: 2.40 MB
+  Peak Non-Paged Pool: 0.06 MB
+  Non-Paged Pool: 0.06 MB
+  Pagefile Commit: 1281.17 MB
+  Peak Pagefile Commit: 1309.79 MB
+  Private Memory: 1281.17 MB
+  Unique Set Size: 839.34 MB
+
+  normale
+  RSS: 1249.48 MB
+  VMS: 1820.80 MB
+  Peak Working Set: 1249.48 MB
+  Working Set: 1249.48 MB
+  Peak Paged Pool: 2.40 MB
+  Paged Pool: 2.40 MB
+  Peak Non-Paged Pool: 0.06 MB
+  Non-Paged Pool: 0.06 MB
+  Pagefile Commit: 1820.80 MB
+  Peak Pagefile Commit: 1860.49 MB
+  Private Memory: 1820.80 MB
+  Unique Set Size: 1158.27 MB
+
+  tf.keras.mixed_precision.set_global_policy("mixed_float16")
+  RSS: 1364.42 MB
+  VMS: 1811.60 MB
+  Peak Working Set: 1364.43 MB
+  Working Set: 1364.42 MB
+  Peak Paged Pool: 2.40 MB
+  Paged Pool: 2.40 MB
+  Peak Non-Paged Pool: 0.06 MB
+  Non-Paged Pool: 0.06 MB
+  Pagefile Commit: 1811.60 MB
+  Peak Pagefile Commit: 1811.60 MB
+  Private Memory: 1811.60 MB
+  Unique Set Size: 1274.86 MB
+
+  mixed_bfloat16
+  RSS: 1364.74 MB
+  VMS: 1811.81 MB
+  Peak Working Set: 1364.75 MB
+  Working Set: 1364.74 MB
+  Peak Paged Pool: 2.40 MB
+  Paged Pool: 2.40 MB
+  Peak Non-Paged Pool: 0.06 MB
+  Non-Paged Pool: 0.06 MB
+  Pagefile Commit: 1811.81 MB
+  Peak Pagefile Commit: 1811.81 MB
+  Private Memory: 1811.81 MB
+  Unique Set Size: 1275.29 MB
+
