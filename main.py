@@ -1,5 +1,7 @@
 import os
 import sys
+import time
+
 from guppy import hpy
 
 import numpy as np
@@ -11,7 +13,12 @@ from memory_profiler import profile
 from memory_profiler import memory_usage
 
 from tensorflow.keras import mixed_precision
-#mixed_precision.set_global_policy('mixed_float16')
+#tf.keras.mixed_precision.set_global_policy("mixed_bfloat16")
+tf.keras.backend.set_floatx('float16')
+
+# For TPUs and CPUs, the mixed_bfloat16 policy should be used instead.
+print(tf.keras.backend.floatx())
+
 
 
 
@@ -75,6 +82,7 @@ def train_model(network_model, X_train, Y_train, X_test, Y_test,
     uss_values = []
 
     optimizer = tf.keras.optimizers.Adam(learning_rate)
+    #optimizer = mixed_precision.LossScaleOptimizer(tf.keras.optimizers.Adam(), dynamic=True)
 
     # Do the training loop
     for epoch in range(num_epochs):
@@ -93,7 +101,7 @@ def train_model(network_model, X_train, Y_train, X_test, Y_test,
             optimizer.apply_gradients(zip(gradients, network_model.trainable_variables))
             minibatch_cost += cost / num_minibatches
 
-            metrics = mem_usage(printt=False)
+            metrics = mem_usage(printt=True)
             rss_values.append(metrics[0])
             vms_values.append(metrics[1])
             peak_wset_values.append(metrics[2])
@@ -106,22 +114,6 @@ def train_model(network_model, X_train, Y_train, X_test, Y_test,
             peak_pagefile_values.append(metrics[9])
             private_values.append(metrics[10])
             uss_values.append(metrics[11])
-
-            '''print(f"  RSS: {metrics[0]:.2f} MB")
-            print(f"  VMS: {metrics[1]:.2f} MB")
-            print(f"  Peak Working Set: {metrics[2]:.2f} MB")
-            print(f"  Working Set: {metrics[3]:.2f} MB")
-            print(f"  Peak Paged Pool: {metrics[4]:.2f} MB")
-            print(f"  Paged Pool: {metrics[5]:.2f} MB")
-            print(f"  Peak Non-Paged Pool: {metrics[6]:.2f} MB")
-            print(f"  Non-Paged Pool: {metrics[7]:.2f} MB")
-            print(f"  Pagefile Commit: {metrics[8]:.2f} MB")
-            print(f"  Peak Pagefile Commit: {metrics[9]:.2f} MB")
-            print(f"  Private Memory: {metrics[10]:.2f} MB")
-            print(f"  Unique Set Size: {metrics[11]:.2f} MB")
-            print("-" * 50)'''
-
-
 
 
 
@@ -254,12 +246,15 @@ def main():
 
 
     input_shape = X_train.shape[1:]
-    network_model = CustomCNN(input_shape, num_classes=6, num_conv_blocks=11, num_dense_layers=1,grad_chek=False)
+    network_model = CustomCNN(input_shape, num_classes=6, num_conv_blocks=10, num_dense_layers=10,grad_chek=False)
     #network_model.build(input_shape=(None, *input_shape))  # Needed to initialize weights
 
 
     #network_model = CheckpointedModel()
-    train_model(network_model, X_train, Y_train, X_test, Y_test, minibatch_size = 128,num_epochs=5,learning_rate= 0.001)
+    start_time = time.time()
+    train_model(network_model, X_train, Y_train, X_test, Y_test, minibatch_size = 256,num_epochs=5,learning_rate= 0.001)
+    print("--- %s seconds ---" % (time.time() - start_time))
+
     mem_usage(printt=False)
 
 
