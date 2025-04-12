@@ -1,27 +1,29 @@
+import gc
 import os
 import sys
 import time
-
-from guppy import hpy
-
+#from guppy import hpy
 import numpy as np
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import psutil
 import tensorflow as tf
 from cnn_utils import *
-from memory_profiler import profile
-from memory_profiler import memory_usage
-
+#from memory_profiler import profile
+#from memory_profiler import memory_usage
 from tensorflow.keras import mixed_precision
-#tf.keras.mixed_precision.set_global_policy("mixed_bfloat16")
-tf.keras.backend.set_floatx('float16')
+from pynvml import *
 
-# For TPUs and CPUs, the mixed_bfloat16 policy should be used instead.
+
+
+red = False
+tf.keras.backend.set_floatx('float32')
+mixed_precision.set_global_policy("float32")
+#mixed_precision.set_global_policy("mixed_bfloat16")
+print("Compute dtype:", mixed_precision.global_policy().compute_dtype)  # Should print 'bfloat16'
+print("Variable dtype:", mixed_precision.global_policy().variable_dtype)  # Should print 'float32'
 print(tf.keras.backend.floatx())
 
-
-
-
+gc.collect()
 def mem_usage(printt = False):
     mem_info = psutil.Process().memory_full_info()  # Retrieve memory full info
     # Return the tuple with all metrics except for `num_page_faults`
@@ -52,7 +54,6 @@ def mem_usage(printt = False):
         print(f"  Peak Pagefile Commit: {mem[9]:.2f} MB")
         print(f"  Private Memory: {mem[10]:.2f} MB")
         print(f"  Unique Set Size: {mem[11]:.2f} MB")
-        print("-" * 50)
 
     return mem
 
@@ -102,6 +103,10 @@ def train_model(network_model, X_train, Y_train, X_test, Y_test,
             minibatch_cost += cost / num_minibatches
 
             metrics = mem_usage(printt=True)
+
+            gpu_memory = tf.config.experimental.get_memory_info('CPU:0')
+            print(gpu_memory)
+            exit()
             rss_values.append(metrics[0])
             vms_values.append(metrics[1])
             peak_wset_values.append(metrics[2])
@@ -156,7 +161,6 @@ def train_model(network_model, X_train, Y_train, X_test, Y_test,
 
 
 
-
 class CustomCNN(tf.keras.Model):
     def __init__(self, input_shape, num_classes=6, num_conv_blocks=2, num_dense_layers=1, base_filters=4, grad_chek = False):
         super(CustomCNN, self).__init__()
@@ -172,12 +176,20 @@ class CustomCNN(tf.keras.Model):
                     tf.recompute_grad(tf.keras.layers.MaxPool2D((2, 2), padding='same'))
                 ])
             else:
-                self.conv_blocks.append([
-                    tf.keras.layers.Conv2D(filters, (3, 3), padding='same', activation=None),
-                    tf.keras.layers.BatchNormalization(),
-                    tf.keras.layers.Activation('relu'),
-                    tf.keras.layers.MaxPool2D((2, 2), padding='same')
-                ])
+                if red:
+                  self.conv_blocks.append([
+                      tf.keras.layers.Conv2D(filters, (3, 3), padding='same', activation=None,dtype="float16"),
+                      tf.keras.layers.BatchNormalization(dtype="float16"),
+                      tf.keras.layers.Activation('relu',dtype="float16"),
+                      tf.keras.layers.MaxPool2D((2, 2), padding='same',dtype="float16")
+                  ])
+                else:
+                                    self.conv_blocks.append([
+                      tf.keras.layers.Conv2D(filters, (3, 3), padding='same', activation=None),
+                      tf.keras.layers.BatchNormalization(),
+                      tf.keras.layers.Activation('relu'),
+                      tf.keras.layers.MaxPool2D((2, 2), padding='same')
+                  ])
 
         self.flatten = tf.keras.layers.Flatten()
 
@@ -186,8 +198,12 @@ class CustomCNN(tf.keras.Model):
             #self.output_layer = tf.recompute_grad(tf.keras.layers.Dense(num_classes, activation=None))
 
         else:
-            self.dense_layers = [tf.keras.layers.Dense(64, activation='relu') for _ in range(num_dense_layers)]
-            self.output_layer = tf.keras.layers.Dense(num_classes, activation=None)
+            if red:
+              self.dense_layers = [tf.keras.layers.Dense(64, activation='relu',dtype = 'float16') for _ in range(num_dense_layers)]
+            else:
+               self.dense_layers = [tf.keras.layers.Dense(64, activation='relu') for _ in range(num_dense_layers)]
+
+
 
         self.output_layer = tf.keras.layers.Dense(num_classes, activation=None)
 
@@ -208,15 +224,17 @@ class CustomCNN(tf.keras.Model):
         return self.output_layer(x)
 
 
-
-
-
-
 def main():
+    devices = tf.config.list_physical_devices()
+    print("All devices:")
+    for device in devices:
+        print(device)
+
     X_train_orig, Y_train_orig, X_test_orig, Y_test_orig, classes = load_dataset()
 
     print(f"Array size: {X_train_orig.nbytes/ (1024 * 1024):.2f} MB")
     print(f"Array size: {Y_train_orig.nbytes/ (1024 * 1024):.2f} MB")
+
 
     X_train = X_train_orig / 255.
     X_test = X_test_orig / 255.
@@ -249,13 +267,13 @@ def main():
     network_model = CustomCNN(input_shape, num_classes=6, num_conv_blocks=10, num_dense_layers=10,grad_chek=False)
     #network_model.build(input_shape=(None, *input_shape))  # Needed to initialize weights
 
+    for layer in network_model.layers:
+      print(f"Layer: {layer.name}, Dtype: {layer.dtype}")
 
-    #network_model = CheckpointedModel()
-    start_time = time.time()
+    #start_time = time.time()
     train_model(network_model, X_train, Y_train, X_test, Y_test, minibatch_size = 256,num_epochs=5,learning_rate= 0.001)
-    print("--- %s seconds ---" % (time.time() - start_time))
+    #print("--- %s seconds ---" % (time.time() - start_time))
 
-    mem_usage(printt=False)
 
 
 main()

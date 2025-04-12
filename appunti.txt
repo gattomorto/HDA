@@ -135,64 +135,34 @@ scaled_optimizer = tf.keras.mixed_precision.experimental.LossScaleOptimizer(opti
 # For Tensorflow >=2.4
 scaled_optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer, "dynamic")
 
-nel caso non ti dovessi ricordare--   #tf.keras.backend.set_floatx('float16') riduceva la memoria di molto
+*nel caso non ti dovessi ricordare--   #tf.keras.backend.set_floatx('float16') riduceva la memoria di molto
 ma visto che dovrà emulare
+* su cpu colab mixedBfloat porta ad una riduzione di memoria
+* su cpu colab mixedfloat è molto lento e non porta a riduzione
+* su cpu colab float16 sembra ancora di piu ridurre memoria, ma è molto lento
+* su cpu in realtà mi sembra che sono tutti lenti uguale -- ma mixedbfloat è piu veloce
+(ma lento cmq)
+* su gpu non ce nessun vantaggio di memoria
+* su tpu di base è su 17/21 ma lento
+* su tpu mixedloat float 17
+*su tpu mixedbfloat 17
+
+tf.config.optimizer.set_jit(True)
+
+tf.keras.backend.clear_session()
+
+
+ricorda che con la gpu print(tf.config.experimental.get_memory_info('GPU:0')) il peak è sempre
+costante.
 
 
 
-  #tf.keras.backend.set_floatx('float16')
-  RSS: 930.86 MB
-  VMS: 1281.17 MB
-  Peak Working Set: 930.86 MB
-  Working Set: 930.86 MB
-  Peak Paged Pool: 2.40 MB
-  Paged Pool: 2.40 MB
-  Peak Non-Paged Pool: 0.06 MB
-  Non-Paged Pool: 0.06 MB
-  Pagefile Commit: 1281.17 MB
-  Peak Pagefile Commit: 1309.79 MB
-  Private Memory: 1281.17 MB
-  Unique Set Size: 839.34 MB
 
-  normale
-  RSS: 1249.48 MB
-  VMS: 1820.80 MB
-  Peak Working Set: 1249.48 MB
-  Working Set: 1249.48 MB
-  Peak Paged Pool: 2.40 MB
-  Paged Pool: 2.40 MB
-  Peak Non-Paged Pool: 0.06 MB
-  Non-Paged Pool: 0.06 MB
-  Pagefile Commit: 1820.80 MB
-  Peak Pagefile Commit: 1860.49 MB
-  Private Memory: 1820.80 MB
-  Unique Set Size: 1158.27 MB
 
-  tf.keras.mixed_precision.set_global_policy("mixed_float16")
-  RSS: 1364.42 MB
-  VMS: 1811.60 MB
-  Peak Working Set: 1364.43 MB
-  Working Set: 1364.42 MB
-  Peak Paged Pool: 2.40 MB
-  Paged Pool: 2.40 MB
-  Peak Non-Paged Pool: 0.06 MB
-  Non-Paged Pool: 0.06 MB
-  Pagefile Commit: 1811.60 MB
-  Peak Pagefile Commit: 1811.60 MB
-  Private Memory: 1811.60 MB
-  Unique Set Size: 1274.86 MB
 
-  mixed_bfloat16
-  RSS: 1364.74 MB
-  VMS: 1811.81 MB
-  Peak Working Set: 1364.75 MB
-  Working Set: 1364.74 MB
-  Peak Paged Pool: 2.40 MB
-  Paged Pool: 2.40 MB
-  Peak Non-Paged Pool: 0.06 MB
-  Non-Paged Pool: 0.06 MB
-  Pagefile Commit: 1811.81 MB
-  Peak Pagefile Commit: 1811.81 MB
-  Private Memory: 1811.81 MB
-  Unique Set Size: 1275.29 MB
+
+
+
+
+
 
