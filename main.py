@@ -11,7 +11,6 @@ from cnn_utils import *
 #from memory_profiler import profile
 #from memory_profiler import memory_usage
 from tensorflow.keras import mixed_precision
-from pynvml import *
 
 
 
@@ -177,14 +176,14 @@ class CustomCNN(tf.keras.Model):
                 ])
             else:
                 if red:
-                  self.conv_blocks.append([
+                      self.conv_blocks.append([
                       tf.keras.layers.Conv2D(filters, (3, 3), padding='same', activation=None,dtype="float16"),
                       tf.keras.layers.BatchNormalization(dtype="float16"),
                       tf.keras.layers.Activation('relu',dtype="float16"),
                       tf.keras.layers.MaxPool2D((2, 2), padding='same',dtype="float16")
                   ])
                 else:
-                                    self.conv_blocks.append([
+                      self.conv_blocks.append([
                       tf.keras.layers.Conv2D(filters, (3, 3), padding='same', activation=None),
                       tf.keras.layers.BatchNormalization(),
                       tf.keras.layers.Activation('relu'),

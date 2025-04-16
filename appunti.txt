@@ -155,14 +155,34 @@ tf.keras.backend.clear_session()
 ricorda che con la gpu print(tf.config.experimental.get_memory_info('GPU:0')) il peak è sempre
 costante.
 
+nella seconda versione vuole che W1 sia definito con indici ordinati--ho paura che nella prima versione
+li va a riordinare da solo
+hidden = tf.sparse.sparse_dense_matmul(X, self.W1)
+#hidden = tf.matmul(X, tf.sparse.to_dense(self.W1))
 
 
+Convert W_indices and W_shapes to TensorFlow constants during initialization to avoid repeated conversions during forward passes.
 
 
+This uses sparse to dense op, which is mostly deprecated in favor of scatter_nd op. That op has a gradient.
+We should change the sparse to dense Python wrapper to call scatter_nd.
 
 
+Here is the solution.
+open YOURPATH/tensorflow/python/ops/sparse_grad.py
+Remove line 33 ops.NotDifferentiable("SparsetoDense")
+At the end, append
+@ops.RegisterGradient("SparseToDense")
+def _SparseToDenseGrad(op, grad):
+sparse_indices, output_shape, _, _ = op.inputs
+sparse_values_grad = array_ops.gather_nd(grad, sparse_indices)
+default_value_grad = math_ops.reduce_sum(grad) - math_ops.reduce_sum(
+sparse_values_grad)
+return [
+array_ops.zeros_like(sparse_indices),
+array_ops.zeros_like(output_shape), sparse_values_grad, default_value_grad
+]
+This implementation is from TF2.0 version.
 
 
-
-
-
+E se provassi ad usare assign() su sparse tensor per modificare il valore invece di ricrearlo di nuovo?
