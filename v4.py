@@ -4,45 +4,16 @@ from guppy import hpy
 import time
 import numpy as np
 import matplotlib.pyplot as plt
-import psutil
 import tensorflow as tf
 from cnn_utils import *
 from memory_profiler import profile
 from memory_profiler import memory_usage
+from utils import *
+np.set_printoptions(threshold=np.inf)
+tf.random.set_seed(0)
+np.random.seed(0)
 
-def mem_usage():
-    mem_info = psutil.Process().memory_full_info()  # Retrieve memory full info
-    # Return the tuple with all metrics except for `num_page_faults`
-    return (
-        tf.config.experimental.get_memory_info('CPU:0')['peak'] / (1024 * 1024),
-        #mem_info.rss / (1024 * 1024),  # Resident Set Size (in MB)
-        mem_info.vms / (1024 * 1024),  # Virtual Memory Size (in MB)
-        mem_info.peak_wset / (1024 * 1024),  # Peak Working Set (in MB)
-        #mem_info.wset / (1024 * 1024),  # Current Working Set (in MB)
-        #mem_info.peak_paged_pool / (1024 * 1024),  # Peak Paged Pool (in MB)
-        #mem_info.paged_pool / (1024 * 1024),  # Current Paged Pool (in MB)
-        #mem_info.peak_nonpaged_pool / (1024 * 1024),  # Peak Non-Paged Pool (in MB)
-        #mem_info.nonpaged_pool / (1024 * 1024),  # Current Non-Paged Pool (in MB)
-        #mem_info.pagefile / (1024 * 1024),  # Pagefile Commit (in MB)
-        mem_info.peak_pagefile / (1024 * 1024)  # Peak Pagefile Commit (in MB)
-        #mem_info.private / (1024 * 1024),  # Private Memory (in MB)
-        #mem_info.uss / (1024 * 1024)  # Unique Set Size (in MB)
-    )
 
-def generate_data(samples, features, classes, noise_std=0.1):
-    # Randomly generate class weight vectors (each class gets one)
-    W = np.random.randn(features, classes)
-    X = np.random.randn(samples, features).astype(np.float32)
-    logits = X @ W + noise_std * np.random.randn(samples, classes)
-    labels = np.argmax(logits, axis=1)
-    Y = tf.keras.utils.to_categorical(labels, num_classes=classes)
-    return X, Y
-
-def pprint_sparse_tensor(st):
-  s = "<SparseTensor shape=%s \n values={" % (st.dense_shape.numpy().tolist(),)
-  for (index, value) in zip(st.indices, st.values):
-    s += f"\n  %s: %s" % (index.numpy().tolist(), value.numpy().tolist())
-  return s + "}>"
 
 def random_sparse_indices(shape, sparsity, seed=None):
     import numpy as np
@@ -205,12 +176,14 @@ class DenseFFN(tf.Module):
         return out
 
 def prune_layer(i,momenta,model):
+    # ascending
     idx = tf.argsort(tf.math.abs(momenta[i]))
     momentum_sorted = tf.gather(momenta[i], idx)
     indices_sorted = tf.gather(model.W_indices[i], idx)
     values_sorted = tf.gather(model.W_values[i], idx)
 
     split_idx = tf.shape(momentum_sorted)[0] // 2
+    #split_idx = 3
 
     indices_new = indices_sorted[split_idx:]
     values_new = values_sorted[split_idx:]
@@ -218,37 +191,98 @@ def prune_layer(i,momenta,model):
 
     model.W_indices[i]=indices_new
     #model.W_values[i]=values_new
-    #   model.W_values[i].assign(values_new)
+    #model.W_values[i].assign(values_new)
     model.W_values[i] = tf.Variable(values_new, name=f"W{i + 1}_values", trainable=True)
 
-
-def get_num_non_zero_weights(i,model):
-    return tf.shape(model.W_indices[i])[0]
+    return split_idx.numpy()
 
 
+#TODO: fanno schifo i nomi e get_contributions ha degli zeri per layers che non sono in non_saturated_layer -- fa schifo
+#TODO: layers in teeoria non serve pechè li ottieni da m
+#TODO: passare direttamente il numero di elementi da ricrescere a regrow_layer piuttosto che la proporzione & to_regrow?!
+#TODO: cambiare il tipo di eccezzione
+def regrow(model, momenta, to_regrow, layers):
+    to_regrow_iniziale = to_regrow
+    nnz_before = get_total_nonzero_weights(model)
+
+    while to_regrow != 0:
+        prop_contributions = get_contributions(layers, momenta)
+        tot_missing = 0
+        # il nome non è proprio giusto dato che potrebbe capitare che il numero da allocare = allo spazio disponibile -- in questo caso l_missing = 0 ed entrerebbe in non_saturated_layers
+        non_saturated_layers = []
+        for l in layers:
+            l_missing = regrow_layer(l, model, prop_contributions[l], to_regrow)
+            tot_missing = tot_missing + l_missing
+            if l_missing == 0: non_saturated_layers.append(l)
+        layers = non_saturated_layers
+        to_regrow = tot_missing
+    nnz_after = get_total_nonzero_weights(model)
+
+    if nnz_before + to_regrow_iniziale != nnz_after:
+        raise Exception("regrown diverso da pruned")
 
 
-    x=0
+#TODO: expected invece di theoretic?
+#TODO: riordinare gli indici?!
+def regrow_layer(i, model, contribution, missing):
+    theoretic_num_regrow = round(missing * contribution)
+
+    '''if theoretic_num_regrow == 0:
+        raise ValueError(f"No regrowth")'''
+
+    shape = model.W_shapes[i]
+    all_coords = np.array([(r, c) for r in range(shape[0]) for c in range(shape[1])], dtype=np.int64)
+
+    existing = set(map(tuple, model.W_indices[i].numpy()))
+    mask = np.array([tuple(coord) not in existing for coord in all_coords])
+    available_coords = all_coords[mask]
+    num_available_coords = len(available_coords)
+
+    if theoretic_num_regrow > num_available_coords:
+        actual_num_regrow = num_available_coords
+    else:
+        actual_num_regrow = theoretic_num_regrow
+
+    chosen = available_coords[np.random.choice(len(available_coords), size=actual_num_regrow, replace=False)]
+
+    new_indices = tf.constant(chosen, dtype=tf.int64)
+    new_values = tf.random.normal([actual_num_regrow])
+
+    model.W_indices[i] = tf.concat([model.W_indices[i], new_indices], axis=0)
+    model.W_values[i] = tf.Variable(tf.concat([model.W_values[i], new_values], axis=0), name=f"W{i + 1}_values",
+                                    trainable=True)
+
+    return theoretic_num_regrow-actual_num_regrow
+
+def get_total_nonzero_weights(model):
+    tot = 0
+    for i in range(model.num_layers):
+        tot = tot + get_num_nonzero_weights(i,model)
+    return tot
+
+def get_num_nonzero_weights(i,model):
+    return tf.shape(model.W_indices[i])[0].numpy()
 
 
-    '''momentum_sorted = momentum[idx]
-    indices_sorted = indices[idx]'''
+#TODO: cambia il tipo di eccezione
+#TODO: riscrivi in forma vettoriale?
+def get_contributions(layers, momenta):
+    if layers==[]:
+        raise Exception("layers empty, probably to_grow > available space")
 
-def get_contribution(i,model,momenta):
-    mean_momentum_contributions = []
-    for layer_i in range(model.num_layers):
-        mean_momentum = np.mean(np.abs(momenta[layer_i]))
-        mean_momentum_contributions.append(mean_momentum)
+    mean_momentas = [0 for _ in range(len(momenta))] #forse è meglio sostituire con model.num_layers
+    for l in layers:
+        mean_momentum = np.mean(np.abs(momenta[l]))
+        mean_momentas[l] = mean_momentum
 
-    total_momentum = sum(mean_momentum_contributions)
+    total_momentum = sum(mean_momentas)
 
-    momentum_contribution_proportions = []
-    for mean_momentum in mean_momentum_contributions:
+    momentum_contribution = []
+    for mean_momentum in mean_momentas:
         proportion = mean_momentum / total_momentum
-        momentum_contribution_proportions.append(proportion)
+        momentum_contribution.append(proportion)
 
-    return momentum_contribution_proportions[i]
-
+    return momentum_contribution
 
 
 def train(model, X, Y, epochs, batch_size,lr ):
@@ -272,7 +306,8 @@ def train(model, X, Y, epochs, batch_size,lr ):
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
 
             if step % 1 == 0:
-                print(f"Step {step:03d} | Loss: {loss:.4f}")
+                pass
+                #print(f"Step {step:03d} | Loss: {loss:.4f}")
                 #print(mem_usage())
                 #print("--- %s seconds ---" % (time.time() - start_time))
 
@@ -280,27 +315,42 @@ def train(model, X, Y, epochs, batch_size,lr ):
                 #print("W1_values:", model.W1_values.numpy())
 
 
-
-
             for var in optimizer.variables:
                 if 'W' in var.path and 'momentum' in var.path:
                     momenta.append(var.value)
 
-            print(get_num_non_zero_weights(0,model))
+            tot_pruned = 0
+            print("tot nonzero weights:",get_total_nonzero_weights(model))
+            for i in range(model.num_layers):
+                nnz = get_num_nonzero_weights(i, model)
+                pruned = prune_layer(i,momenta,model)
+                tot_pruned = tot_pruned + pruned
+                #print(get_num_nonzero_weights(i, model))
+                #print("layer:",i,",non zero weights:",nnz ,",pruned:",pruned)
+            #print("tot pruned: ",tot_pruned)
 
-            prune_layer(0,momenta,model)
-            print(get_num_non_zero_weights(0,model))
+            #print("tot nonzero weights: ",get_total_nonzero_weights(model))
+            tot_regrown = 0
+
+            regrow(model,momenta,tot_pruned, [l for l in range(model.num_layers)] )
+            print("tot nonzero weights: ",get_total_nonzero_weights(model))
+
+
+
+
+
+
+
+
             optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
             momenta=[]
 
 
 def main():
-    num_features = 100
-    num_classes = 10
-    hidden_dim =  40
-    num_hidden_layers = 5
-
-
+    num_features = 50
+    num_classes = 2
+    hidden_dim =  50
+    num_hidden_layers = 1
 
 
     X, Y = generate_data(samples = 100, features=num_features, classes=num_classes)
