@@ -153,7 +153,7 @@ class Regrow(unittest.TestCase):
 
         with self.assertRaises(Exception) as context:
             v4.regrow(m,momenta,1,[0,1])
-        self.assertIn("regrown diverso da pruned", str(context.exception))
+        self.assertIn("regrown diverso da to_regrow", str(context.exception))
 
 
     def test_E(self):

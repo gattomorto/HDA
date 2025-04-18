@@ -196,39 +196,65 @@ def prune_layer(i,momenta,model):
 
     return split_idx.numpy()
 
+def prune(momenta,model,verbose):
+    tot_pruned = 0
+    if verbose:
+        print(f"Total Non-zero weights: {get_total_nonzero_weights(model)}")
+
+    for i in range(model.num_layers):
+        nz_before_i = get_num_nonzero_weights(i, model)
+        pruned_i = prune_layer(i, momenta, model)
+        nz_after_i = get_num_nonzero_weights(i, model)
+        tot_pruned = tot_pruned + pruned_i
+        if verbose:
+            print(f"Layer: {i}, Non-zero weights before: {nz_before_i}, Pruned: {pruned_i}, Non-zero weights after: {nz_after_i}")
+    if verbose:
+        print(f"Tot pruned: {tot_pruned}")
+        print(f"Total Non-zero weights: {get_total_nonzero_weights(model)}")
+
+    return tot_pruned
+
 
 #TODO: fanno schifo i nomi e get_contributions ha degli zeri per layers che non sono in non_saturated_layer -- fa schifo
 #TODO: layers in teeoria non serve pechè li ottieni da m
-#TODO: passare direttamente il numero di elementi da ricrescere a regrow_layer piuttosto che la proporzione & to_regrow?!
 #TODO: cambiare il tipo di eccezzione
-def regrow(model, momenta, to_regrow, layers):
+#TODO: actual regrow diversio da effective pruned o qaulcosa
+def regrow(model, momenta, to_regrow, layers,verbose=True):
     to_regrow_iniziale = to_regrow
     nnz_before = get_total_nonzero_weights(model)
+    true_prop_contributions = get_contributions(layers, momenta)
+    print(true_prop_contributions)
 
     while to_regrow != 0:
         prop_contributions = get_contributions(layers, momenta)
         tot_missing = 0
-        # il nome non è proprio giusto dato che potrebbe capitare che il numero da allocare = allo spazio disponibile -- in questo caso l_missing = 0 ed entrerebbe in non_saturated_layers
         non_saturated_layers = []
         for l in layers:
-            l_missing = regrow_layer(l, model, prop_contributions[l], to_regrow)
-            tot_missing = tot_missing + l_missing
-            if l_missing == 0: non_saturated_layers.append(l)
+            expected_regrow = round(to_regrow * prop_contributions[l])
+            actual_regrow = regrow_layer(l, model, expected_regrow)
+            missing = expected_regrow - actual_regrow
+            tot_missing = tot_missing + missing
+            is_saturated = get_num_zero_weights(l,model)==0
+            if not is_saturated:
+                non_saturated_layers.append(l)
+            if verbose:
+                print(f"Layer: {l}, Regrown: {actual_regrow}, Saturated: {is_saturated}")
+
         layers = non_saturated_layers
         to_regrow = tot_missing
+        if verbose & (tot_missing != 0):
+            print(f"Some layers are saturated, missing {tot_missing}, redistribution...")
+
     nnz_after = get_total_nonzero_weights(model)
 
     if nnz_before + to_regrow_iniziale != nnz_after:
-        raise Exception("regrown diverso da pruned")
+        raise Exception("regrown diverso da to_regrow")
 
 
-#TODO: expected invece di theoretic?
+
+
 #TODO: riordinare gli indici?!
-def regrow_layer(i, model, contribution, missing):
-    theoretic_num_regrow = round(missing * contribution)
-
-    '''if theoretic_num_regrow == 0:
-        raise ValueError(f"No regrowth")'''
+def regrow_layer(i, model, desired_growth):
 
     shape = model.W_shapes[i]
     all_coords = np.array([(r, c) for r in range(shape[0]) for c in range(shape[1])], dtype=np.int64)
@@ -238,21 +264,21 @@ def regrow_layer(i, model, contribution, missing):
     available_coords = all_coords[mask]
     num_available_coords = len(available_coords)
 
-    if theoretic_num_regrow > num_available_coords:
-        actual_num_regrow = num_available_coords
+    if desired_growth > num_available_coords:
+        actual_regrow = num_available_coords
     else:
-        actual_num_regrow = theoretic_num_regrow
+        actual_regrow = desired_growth
 
-    chosen = available_coords[np.random.choice(len(available_coords), size=actual_num_regrow, replace=False)]
+    chosen = available_coords[np.random.choice(len(available_coords), size=actual_regrow, replace=False)]
 
     new_indices = tf.constant(chosen, dtype=tf.int64)
-    new_values = tf.random.normal([actual_num_regrow])
+    new_values = tf.random.normal([actual_regrow])
 
     model.W_indices[i] = tf.concat([model.W_indices[i], new_indices], axis=0)
     model.W_values[i] = tf.Variable(tf.concat([model.W_values[i], new_values], axis=0), name=f"W{i + 1}_values",
                                     trainable=True)
 
-    return theoretic_num_regrow-actual_num_regrow
+    return actual_regrow
 
 def get_total_nonzero_weights(model):
     tot = 0
@@ -263,6 +289,9 @@ def get_total_nonzero_weights(model):
 def get_num_nonzero_weights(i,model):
     return tf.shape(model.W_indices[i])[0].numpy()
 
+def get_num_zero_weights(i,model):
+    shape = model.W_shapes[i]
+    return shape[0]*shape[1] - get_num_nonzero_weights(i,model)
 
 #TODO: cambia il tipo di eccezione
 #TODO: riscrivi in forma vettoriale?
@@ -319,18 +348,8 @@ def train(model, X, Y, epochs, batch_size,lr ):
                 if 'W' in var.path and 'momentum' in var.path:
                     momenta.append(var.value)
 
-            tot_pruned = 0
-            print("tot nonzero weights:",get_total_nonzero_weights(model))
-            for i in range(model.num_layers):
-                nnz = get_num_nonzero_weights(i, model)
-                pruned = prune_layer(i,momenta,model)
-                tot_pruned = tot_pruned + pruned
-                #print(get_num_nonzero_weights(i, model))
-                #print("layer:",i,",non zero weights:",nnz ,",pruned:",pruned)
-            #print("tot pruned: ",tot_pruned)
+            tot_pruned=prune(momenta,model,verbose=False)
 
-            #print("tot nonzero weights: ",get_total_nonzero_weights(model))
-            tot_regrown = 0
 
             regrow(model,momenta,tot_pruned, [l for l in range(model.num_layers)] )
             print("tot nonzero weights: ",get_total_nonzero_weights(model))
