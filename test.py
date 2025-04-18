@@ -2,7 +2,21 @@ import unittest
 import v4
 import numpy as np
 import tensorflow as tf
-
+'''
+    remaining * true_prop_contributions[0]
+    np.float64(0.5974581465125084)
+    5 * true_prop_contributions[0]
+    np.float32(0.5974581)
+    5 * true_prop_contributions[1]
+    np.float32(0.6830293)
+    5 * true_prop_contributions[2]
+    np.float32(3.719513)
+    true_prop_contributions
+    [np.float32(0.11949163), np.float32(0.13660586), np.float32(0.74390256)]
+    sum(true_prop_contributions)
+    np.float32(1.0)
+    nota che se usi round() piuttosto di int() vengono allocati 1+1+4 = 6 che è addirittura piu grande di 5 
+    '''
 class Regrow(unittest.TestCase):
     @staticmethod
     def create_indices(num_free,layer_idx,model):
@@ -23,13 +37,13 @@ class Regrow(unittest.TestCase):
         model.W_indices[layer_idx] = tf.constant(indices, dtype=tf.int64)
 
     def test_A(self):
-        '''
-        # si testa cosa succede se allocazione = spazio libero
-        :return:
-        '''
+
         # nesun parametro è importante tranne num_hidden
         m = v4.FFNsSparse3(input_dim=100,hidden_dim=100,output_dim=100,num_hidden_layers=3,sparsity=0)
-        momenta = [6,1,2,1]
+        #momenta deve contenere i momenti di ogni variabile per ogni layer
+        #quindi la prima lista deve essere di dimensione 14*14
+        #qui è stato fatto in modo tale che la media dei momenti per lay1 sia 6, poi 1,2,1
+        momenta = [[6,6,7,5],[1,2,0],[2],[1,1,0,0,2,2]]
 
         m.W_shapes[0] = [14,14] #196 pesi
         m.W_shapes[1] = [20,20]
@@ -60,8 +74,10 @@ class Regrow(unittest.TestCase):
         nnz_after_regrowth = v4.get_total_nonzero_weights(m)
         self.assertEqual(nnz_before_regrowth+200,nnz_after_regrowth)#devono essere stati distribuiti esattamente 200 pesi
 
-
     def test_B(self):
+        '''
+        # si testa cosa succede se allocazione = spazio libero
+        '''
         # nesun parametro è importante tranne num_hidden
         m = v4.FFNsSparse3(input_dim=100,hidden_dim=100,output_dim=100,num_hidden_layers=3,sparsity=0)
 
@@ -99,7 +115,6 @@ class Regrow(unittest.TestCase):
     def test_C(self):
         '''
         regrow 1 peso
-        :return:
         '''
         # nesun parametro è importante tranne num_hidden
         m = v4.FFNsSparse3(input_dim=100,hidden_dim=100,output_dim=100,num_hidden_layers=3,sparsity=0)
@@ -151,10 +166,8 @@ class Regrow(unittest.TestCase):
         self.create_indices(120,0,m)
         self.create_indices(300,1,m)
 
-        with self.assertRaises(Exception) as context:
-            v4.regrow(m,momenta,1,[0,1])
-        self.assertIn("regrown diverso da to_regrow", str(context.exception))
-
+        debdt = v4.regrow(m,momenta,1,[0,1])
+        self.assertEqual(debdt,1)
 
     def test_E(self):
         '''
@@ -175,6 +188,9 @@ class Regrow(unittest.TestCase):
             v4.regrow(m, momenta, 100, [0, 1])
         self.assertIn("layers empty, probably to_grow > available space", str(context.exception))
 
+    def test_F(self):
+        pass
+        #testare quando momentum sono a zero
 
 
 if __name__ == '__main__':

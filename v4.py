@@ -219,19 +219,24 @@ def prune(momenta,model,verbose):
 #TODO: layers in teeoria non serve pechè li ottieni da m
 #TODO: cambiare il tipo di eccezzione
 #TODO: actual regrow diversio da effective pruned o qaulcosa
-def regrow(model, momenta, to_regrow, layers,verbose=True):
-    to_regrow_iniziale = to_regrow
+def regrow(model, momenta, to_regrow, layers,verbose=False):
     nnz_before = get_total_nonzero_weights(model)
     true_prop_contributions = get_contributions(layers, momenta)
-    print(true_prop_contributions)
+    #print(true_prop_contributions)
+    tot_regrown = 0
+    remaining = to_regrow
 
-    while to_regrow != 0:
+    while remaining != 0:
         prop_contributions = get_contributions(layers, momenta)
         tot_missing = 0
         non_saturated_layers = []
         for l in layers:
-            expected_regrow = round(to_regrow * prop_contributions[l])
+            try:
+                expected_regrow = int(remaining * prop_contributions[l])
+            except:
+                pass
             actual_regrow = regrow_layer(l, model, expected_regrow)
+            tot_regrown = tot_regrown + actual_regrow
             missing = expected_regrow - actual_regrow
             tot_missing = tot_missing + missing
             is_saturated = get_num_zero_weights(l,model)==0
@@ -241,14 +246,28 @@ def regrow(model, momenta, to_regrow, layers,verbose=True):
                 print(f"Layer: {l}, Regrown: {actual_regrow}, Saturated: {is_saturated}")
 
         layers = non_saturated_layers
-        to_regrow = tot_missing
+        remaining = tot_missing
         if verbose & (tot_missing != 0):
             print(f"Some layers are saturated, missing {tot_missing}, redistribution...")
 
     nnz_after = get_total_nonzero_weights(model)
 
-    if nnz_before + to_regrow_iniziale != nnz_after:
-        raise Exception("regrown diverso da to_regrow")
+    test1 = 0
+    test2 = 0
+    if nnz_before + to_regrow != nnz_after:
+        test1 = 1
+
+    if to_regrow != tot_regrown:
+        test2 = 1
+
+    if(test1 != test2):
+        raise Exception("i due test devono corrispondere")
+
+    debdt = to_regrow-tot_regrown
+    if debdt < 0:
+        raise Exception("debdt strano")
+
+    return debdt
 
 
 
@@ -280,6 +299,13 @@ def regrow_layer(i, model, desired_growth):
 
     return actual_regrow
 
+def prune_and_regrow(model,momenta,debdt):
+    tot_pruned = prune(momenta, model, verbose=False)
+    debdt = regrow(model, momenta, tot_pruned+debdt, [l for l in range(model.num_layers)])
+    print("tot nonzero weights: ", get_total_nonzero_weights(model))
+    return debdt
+
+
 def get_total_nonzero_weights(model):
     tot = 0
     for i in range(model.num_layers):
@@ -295,16 +321,21 @@ def get_num_zero_weights(i,model):
 
 #TODO: cambia il tipo di eccezione
 #TODO: riscrivi in forma vettoriale?
+#TODO: proprio non mi piace cosi che mean momentas ha gli 0 per i valori non validi
 def get_contributions(layers, momenta):
     if layers==[]:
         raise Exception("layers empty, probably to_grow > available space")
-
+    # ricorda che momenta è una lista di vettori
     mean_momentas = [0 for _ in range(len(momenta))] #forse è meglio sostituire con model.num_layers
     for l in layers:
         mean_momentum = np.mean(np.abs(momenta[l]))
         mean_momentas[l] = mean_momentum
 
     total_momentum = sum(mean_momentas)
+    if total_momentum == 0:
+        momentum_contribution = np.zeros(len(momenta))
+        momentum_contribution[layers] = 1 / len(layers)
+        return momentum_contribution
 
     momentum_contribution = []
     for mean_momentum in mean_momentas:
@@ -316,7 +347,7 @@ def get_contributions(layers, momenta):
 
 def train(model, X, Y, epochs, batch_size,lr ):
     start_time = time.time()
-
+    debdt=0
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
     loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
     momenta = []
@@ -348,13 +379,7 @@ def train(model, X, Y, epochs, batch_size,lr ):
                 if 'W' in var.path and 'momentum' in var.path:
                     momenta.append(var.value)
 
-            tot_pruned=prune(momenta,model,verbose=False)
-
-
-            regrow(model,momenta,tot_pruned, [l for l in range(model.num_layers)] )
-            print("tot nonzero weights: ",get_total_nonzero_weights(model))
-
-
+            debdt=prune_and_regrow(model,momenta,debdt)
 
 
 
@@ -364,22 +389,22 @@ def train(model, X, Y, epochs, batch_size,lr ):
             optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
             momenta=[]
 
-
+#TODO: capire. perchè hidden_dim = 1 dà problemi
 def main():
-    num_features = 50
-    num_classes = 2
-    hidden_dim =  50
-    num_hidden_layers = 1
+    num_features = 21
+    num_classes = 10
+    hidden_dim = 27 #non modificare qst
+    num_hidden_layers = 20
 
 
     X, Y = generate_data(samples = 100, features=num_features, classes=num_classes)
 
     model = FFNsSparse3(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes,
-                        num_hidden_layers=num_hidden_layers, sparsity=0.511)
+                        num_hidden_layers=num_hidden_layers, sparsity=0)
     #model = DenseFFN(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes, num_hidden_layers=num_hidden_layers)
 
     t = model.trainable_variables
-    train(model, X, Y,epochs=5, batch_size=10,lr= 0.001)
+    train(model, X, Y,epochs=50, batch_size=10,lr= 0.001)
 
 
 if __name__ == '__main__':

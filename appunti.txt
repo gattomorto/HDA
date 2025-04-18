@@ -186,3 +186,5 @@ This implementation is from TF2.0 version.
 
 
 E se provassi ad usare assign() su sparse tensor per modificare il valore invece di ricrearlo di nuovo?
+
+da qualche parte uso vettoru numpy, da qualche altra parte vettrori std di python -- deve essere uniforme
