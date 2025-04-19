@@ -46,53 +46,10 @@ def random_sparse_indices2(shape, sparsity, seed=None):
 
     return tf.constant(sorted_indices, dtype=tf.int64), nnz
 
-class FFNsSparse(tf.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_hidden_layers, sparsity=0.0):
-
-        super().__init__(name=None)
-
-        self.sparsity = sparsity
-        self.num_layers = num_hidden_layers + 1  # hidden layers + output layer
-
-        # Dimensions for each layer
-        layer_dims = [input_dim] + [hidden_dim] * num_hidden_layers + [output_dim]
-
-        self.W_indices = []
-        self.W_values = []
-        self.W_shapes = []
-        self.b = []
-
-        for i in range(self.num_layers):
-            in_dim = layer_dims[i]
-            out_dim = layer_dims[i + 1]
-            shape = [out_dim, in_dim]
-
-            indices, nnz = random_sparse_indices(shape, sparsity=sparsity, seed=42 + i)
-            values = tf.Variable(tf.random.normal([nnz]), name=f"W{i+1}_values")
-            bias = tf.Variable(tf.zeros([out_dim, 1]), name=f"b{i+1}")
-
-            self.W_indices.append(indices)
-            self.W_values.append(values)
-            self.W_shapes.append(shape)
-            self.b.append(bias)
-
-
-    def __call__(self, X):
-        out = X
-        for i in range(self.num_layers):
-            W = tf.sparse.SparseTensor(indices=self.W_indices[i], values=self.W_values[i], dense_shape=self.W_shapes[i])
-            out = tf.sparse.sparse_dense_matmul(W, out)
-
-            #Wd = tf.sparse.to_dense(W)
-            #out = tf.matmul(Wd, out)
-
-            out = out + self.b[i]
-            if i < self.num_layers - 1:
-                out = tf.nn.relu(out)
-
-        return out
 
 # è come FFNsSparse, tranne che si aspetta X (batch_size, input_dim)
+#TODO: set indices, set values
+#TODO: sono sicuro che indices deve essere tf.Constant anche se viene modificato in prune & regrow?
 class FFNsSparse3(tf.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_hidden_layers, sparsity=0.0):
 
@@ -118,9 +75,9 @@ class FFNsSparse3(tf.Module):
             #bias = tf.Variable(tf.zeros([out_dim, 1]), name=f"b{i+1}")
 
             self.W_indices[i], nnz = random_sparse_indices2(shape, sparsity=sparsity, seed=i)
-            self.W_values[i] = tf.Variable(tf.random.normal([nnz]), name=f"W{i + 1}_values")
+            self.W_values[i] = tf.Variable(tf.random.normal([nnz]), name=f"W{i}_values")
             self.W_shapes[i] = shape
-            self.b[i] = tf.Variable(tf.zeros([1,out_dim]), name=f"b{i + 1}")
+            self.b[i] = tf.Variable(tf.zeros([1,out_dim]), name=f"b{i}")
 
 
     def __call__(self, X):
@@ -161,8 +118,8 @@ class DenseFFN(tf.Module):
             in_dim = layer_dims[i]
             out_dim = layer_dims[i + 1]
 
-            W = tf.Variable(tf.random.normal([in_dim, out_dim]), name=f"W{i+1}")
-            b = tf.Variable(tf.zeros([1,out_dim]), name=f"b{i+1}")
+            W = tf.Variable(tf.random.normal([in_dim, out_dim]), name=f"W{i}")
+            b = tf.Variable(tf.zeros([1,out_dim]), name=f"b{i}")
 
             self.W.append(W)
             self.b.append(b)
@@ -175,7 +132,7 @@ class DenseFFN(tf.Module):
                 out = tf.nn.relu(out)
         return out
 
-def prune_layer(i,momenta,model):
+def prune_layer_old(i,momenta,model):
     # ascending
     idx = tf.argsort(tf.math.abs(momenta[i]))
     momentum_sorted = tf.gather(momenta[i], idx)
@@ -196,14 +153,34 @@ def prune_layer(i,momenta,model):
 
     return split_idx.numpy()
 
-def prune(momenta,model,verbose):
+#TODO: serve fare tf.constant quando si creano nuovi indici?
+def prune_layer(i, model):
+
+    # Sort by absolute weight values (ascending)
+    idx = tf.argsort(tf.math.abs(model.W_values[i]))
+
+    values_sorted =  tf.gather(model.W_values[i], idx)
+    indices_sorted = tf.gather(model.W_indices[i], idx)
+
+    split_idx = tf.shape(values_sorted)[0] // 2
+
+    indices_new = indices_sorted[split_idx:]
+    values_new = values_sorted[split_idx:]
+
+
+    model.W_indices[i] = indices_new
+    model.W_values[i] = tf.Variable(values_new, name=f"W{i}_values", trainable=True)
+
+    return split_idx.numpy()
+
+def prune(model,verbose):
     tot_pruned = 0
     if verbose:
         print(f"Total Non-zero weights: {get_total_nonzero_weights(model)}")
 
     for i in range(model.num_layers):
         nz_before_i = get_num_nonzero_weights(i, model)
-        pruned_i = prune_layer(i, momenta, model)
+        pruned_i = prune_layer(i, model)
         nz_after_i = get_num_nonzero_weights(i, model)
         tot_pruned = tot_pruned + pruned_i
         if verbose:
@@ -231,10 +208,7 @@ def regrow(model, momenta, to_regrow, layers,verbose=False):
         tot_missing = 0
         non_saturated_layers = []
         for l in layers:
-            try:
-                expected_regrow = int(remaining * prop_contributions[l])
-            except:
-                pass
+            expected_regrow = int(remaining * prop_contributions[l])
             actual_regrow = regrow_layer(l, model, expected_regrow)
             tot_regrown = tot_regrown + actual_regrow
             missing = expected_regrow - actual_regrow
@@ -291,16 +265,17 @@ def regrow_layer(i, model, desired_growth):
     chosen = available_coords[np.random.choice(len(available_coords), size=actual_regrow, replace=False)]
 
     new_indices = tf.constant(chosen, dtype=tf.int64)
-    new_values = tf.random.normal([actual_regrow])
+    #new_values = tf.random.normal([actual_regrow])
+    new_values = tf.zeros([actual_regrow])
 
     model.W_indices[i] = tf.concat([model.W_indices[i], new_indices], axis=0)
-    model.W_values[i] = tf.Variable(tf.concat([model.W_values[i], new_values], axis=0), name=f"W{i + 1}_values",
-                                    trainable=True)
+    model.W_values[i] = tf.Variable(tf.concat([model.W_values[i], new_values], axis=0),
+                                    name=f"W{i}_values", trainable=True)
 
     return actual_regrow
 
 def prune_and_regrow(model,momenta,debdt):
-    tot_pruned = prune(momenta, model, verbose=False)
+    tot_pruned = prune( model, verbose=False)
     debdt = regrow(model, momenta, tot_pruned+debdt, [l for l in range(model.num_layers)])
     #print("tot nonzero weights: ", get_total_nonzero_weights(model))
     return debdt
@@ -375,7 +350,7 @@ def train(model, X, y, epochs, batch_size,lr ):
 
                 #exit(-1)
                 #print("W1_values:", model.W1_values.numpy())
-            if it % 30 == 0:
+            if it % 10 == 0:
                 print("prune & regrow")
                 for var in optimizer.variables:
                     if 'W' in var.path and 'momentum' in var.path:

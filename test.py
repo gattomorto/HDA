@@ -188,9 +188,102 @@ class Regrow(unittest.TestCase):
             v4.regrow(m, momenta, 100, [0, 1])
         self.assertIn("layers empty, probably to_grow > available space", str(context.exception))
 
+    #TODO
     def test_F(self):
         pass
         #testare quando momentum sono a zero
+
+    def test_G(self):
+        '''
+        test regrow_layer
+        nota che non W1 è inizializzato ma non si usa
+        '''
+        # nessun parametro è importante tranne num_hidden=1
+        m = v4.FFNsSparse3(input_dim=100,hidden_dim=100,output_dim=100,num_hidden_layers=1,
+                           sparsity=0)
+
+        m.W_shapes[0] = [2,2]#4 pesi
+        m.W_shapes[1] = [2,2]#4 pesi
+
+        indices0 = np.array([[0,1],[1,0]])
+        values0 = np.array([    -1,
+                                   3    ],dtype=np.float32)
+
+        indices1 = np.array([[0,1]])
+        values1 = np.array([    -1,
+                                         ],dtype=np.float32)
+
+        m.W_indices[0] = tf.constant(indices0, dtype=tf.int64)
+        m.W_values[0] = tf.Variable(values0, name=f"W{0}_values", trainable=True)
+
+        m.W_indices[1] = tf.constant(indices1, dtype=tf.int64)
+        m.W_values[1] = tf.Variable(values1, name=f"W{1}_values", trainable=True)
+
+        regrown = v4.regrow_layer(0,m,200)
+        self.assertEqual(regrown,2)#perche ci sono solo due posti liberi
+
+        # in questo blocco si testa che indices0 corrispondano ancora agli stessi valori values0
+        new_indices0 =m.W_indices[0].numpy()
+        position_index_01 = np.where((new_indices0 == [0,1]).all(axis=1))[0]
+        value01 = m.W_values[0].numpy()[position_index_01]
+        self.assertEqual(-1,value01)
+        position_index_10 = np.where((new_indices0 == [1,0]).all(axis=1))[0]
+        value01 = m.W_values[0].numpy()[position_index_10]
+        self.assertEqual(3,value01)
+
+
+
+class Prune(unittest.TestCase):
+    def test_A(self):
+        '''
+        test funzionamento base di prune_layer
+        '''
+        m = v4.FFNsSparse3(input_dim=2,hidden_dim=2,output_dim=2,num_hidden_layers=0,sparsity=0)
+        values_before_pruning = np.array([0.1,-0.3,
+                                          0.01,0.4])
+        m.W_values[0] = tf.Variable(values_before_pruning, name=f"W{0}_values", trainable=True)
+        num_pruned = v4.prune_layer(0,m)
+
+        values_after_pruning = m.W_values[0].numpy()
+        # devono rimanere i due piu grandi in valore assoluto
+        self.assertTrue( np.array_equal(values_after_pruning,np.array([-0.3,0.4])))
+
+        indices_after_pruning = m.W_indices[0].numpy()
+        self.assertTrue( np.array_equal(indices_after_pruning,np.array([[0,1],[1,1]])))
+
+    def test_B(self):
+        '''
+        prune_layer in caso di tutti i pesi uguali
+        '''
+        m = v4.FFNsSparse3(input_dim=2,hidden_dim=2,output_dim=2,num_hidden_layers=0,sparsity=0)
+        values_before_pruning = np.array([-0.3, -0.3,
+                                         - 0.3, -0.3])
+        m.W_values[0] = tf.Variable(values_before_pruning, name=f"W{0}_values", trainable=True)
+        num_pruned = v4.prune_layer(0,m)
+
+        values_after_pruning = m.W_values[0].numpy()
+        self.assertTrue(np.array_equal(values_after_pruning,np.array([-0.3,-0.3])))
+
+    def test_C(self):
+        '''
+        prune_layer se gli indici non hanno un ordine particolare
+        '''
+        m = v4.FFNsSparse3(input_dim=2,hidden_dim=2,output_dim=2,num_hidden_layers=0,sparsity=0)
+        values_before_pruning = np.array([0.1,-0.3,
+                                          0.01,0.4])
+        m.W_values[0] = tf.Variable(values_before_pruning, name=f"W{0}_values", trainable=True)
+        m.W_indices[0] = np.array([[1,1],[0,0],
+                                   [0,1],[1,0]])
+        num_pruned = v4.prune_layer(0,m)
+
+        values_after_pruning = m.W_values[0].numpy()
+        self.assertTrue( np.array_equal(values_after_pruning,np.array([-0.3,0.4])))
+
+        indices_after_pruning = m.W_indices[0].numpy()
+        self.assertTrue( np.array_equal(indices_after_pruning,np.array([[0,0],[1,0]])))
+
+
+
 
 
 if __name__ == '__main__':
