@@ -8,11 +8,11 @@ import tensorflow as tf
 from cnn_utils import *
 from memory_profiler import profile
 from memory_profiler import memory_usage
+
 from utils import *
 np.set_printoptions(threshold=np.inf)
 tf.random.set_seed(0)
 np.random.seed(0)
-
 
 
 def random_sparse_indices(shape, sparsity, seed=None):
@@ -161,8 +161,8 @@ class DenseFFN(tf.Module):
             in_dim = layer_dims[i]
             out_dim = layer_dims[i + 1]
 
-            W = tf.Variable(tf.random.normal([out_dim, in_dim]), name=f"W{i+1}")
-            b = tf.Variable(tf.zeros([out_dim, 1]), name=f"b{i+1}")
+            W = tf.Variable(tf.random.normal([in_dim, out_dim]), name=f"W{i+1}")
+            b = tf.Variable(tf.zeros([1,out_dim]), name=f"b{i+1}")
 
             self.W.append(W)
             self.b.append(b)
@@ -170,7 +170,7 @@ class DenseFFN(tf.Module):
     def __call__(self, X):
         out = X
         for i in range(self.num_layers):
-            out = tf.matmul(self.W[i], out) + self.b[i]
+            out = tf.matmul(out,self.W[i]) + self.b[i]
             if i < self.num_layers - 1:
                 out = tf.nn.relu(out)
         return out
@@ -302,7 +302,7 @@ def regrow_layer(i, model, desired_growth):
 def prune_and_regrow(model,momenta,debdt):
     tot_pruned = prune(momenta, model, verbose=False)
     debdt = regrow(model, momenta, tot_pruned+debdt, [l for l in range(model.num_layers)])
-    print("tot nonzero weights: ", get_total_nonzero_weights(model))
+    #print("tot nonzero weights: ", get_total_nonzero_weights(model))
     return debdt
 
 
@@ -345,17 +345,19 @@ def get_contributions(layers, momenta):
     return momentum_contribution
 
 
-def train(model, X, Y, epochs, batch_size,lr ):
+def train(model, X, y, epochs, batch_size,lr ):
     start_time = time.time()
     debdt=0
+    it = 0
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
     loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
     momenta = []
-    dataset = tf.data.Dataset.from_tensor_slices((X, Y)).batch(batch_size)
+    dataset = tf.data.Dataset.from_tensor_slices((X, y)).batch(batch_size)
     for epoch in range(epochs):
         print(f"\nEpoch {epoch + 1}")
         for step, (x_batch, y_batch) in enumerate(dataset):
             #x_batch = tf.transpose(x_batch, perm=[1, 0])
+            it=it+1
 
             with tf.GradientTape() as tape:
                 logits = model(x_batch)
@@ -366,45 +368,51 @@ def train(model, X, Y, epochs, batch_size,lr ):
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
 
             if step % 1 == 0:
-                pass
+                test(model,X,y)
                 #print(f"Step {step:03d} | Loss: {loss:.4f}")
                 #print(mem_usage())
                 #print("--- %s seconds ---" % (time.time() - start_time))
 
                 #exit(-1)
                 #print("W1_values:", model.W1_values.numpy())
+            if it % 30 == 0:
+                print("prune & regrow")
+                for var in optimizer.variables:
+                    if 'W' in var.path and 'momentum' in var.path:
+                        momenta.append(var.value)
+
+                debdt=prune_and_regrow(model,momenta,debdt)
 
 
-            for var in optimizer.variables:
-                if 'W' in var.path and 'momentum' in var.path:
-                    momenta.append(var.value)
-
-            debdt=prune_and_regrow(model,momenta,debdt)
+                optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
+                momenta=[]
+                pass
 
 
 
+def test(model, X, y):
+    logits = model(X)
+    preds = tf.argmax(logits, axis=1)
+    true_labels = tf.argmax(y, axis=1)
+    accuracy = tf.reduce_mean(tf.cast(tf.equal(preds, true_labels), tf.float32))
+    print(accuracy.numpy())
 
-
-
-            optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
-            momenta=[]
 
 #TODO: capire. perchè hidden_dim = 1 dà problemi
 def main():
-    num_features = 21
+    num_features = 784
     num_classes = 10
-    hidden_dim = 27 #non modificare qst
-    num_hidden_layers = 20
+    hidden_dim = 256
+    num_hidden_layers = 5
+    (X_train,y_train),(X_test,y_test)= load_mnist_data()
 
+    #X_train, y_train = generate_data(samples = 100, features=num_features, classes=num_classes)
 
-    X, Y = generate_data(samples = 100, features=num_features, classes=num_classes)
-
-    model = FFNsSparse3(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes,
-                        num_hidden_layers=num_hidden_layers, sparsity=0)
+    model = FFNsSparse3(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes,num_hidden_layers=num_hidden_layers, sparsity=0.9)
     #model = DenseFFN(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes, num_hidden_layers=num_hidden_layers)
 
     t = model.trainable_variables
-    train(model, X, Y,epochs=50, batch_size=10,lr= 0.001)
+    train(model, X_train, y_train,epochs=500, batch_size=128,lr= 0.01)
 
 
 if __name__ == '__main__':
