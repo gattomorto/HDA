@@ -3,6 +3,8 @@ import psutil
 import tensorflow as tf
 import numpy as np
 
+import v4
+
 
 # In utils.py, modify plot_momentum_histograms() like this:
 def plot_abs_momentum_histograms(momenta, model):
@@ -72,8 +74,11 @@ def load_mnist_data():
 import matplotlib.pyplot as plt
 import numpy as np
 
+def plot_weight_histogram_all(model,it):
+    for i in range(model.num_layers):
+        plot_weight_histogram(model,i,it)
 
-def plot_weight_histogram(model, layer_idx, bins=50, figsize=(10, 6)):
+def plot_weight_histogram(model, layer_idx, it):
     """
     Plot histogram of absolute weight values for a specific layer.
 
@@ -88,10 +93,11 @@ def plot_weight_histogram(model, layer_idx, bins=50, figsize=(10, 6)):
 
     # Get the weight values for the specified layer
     weights = model.W_values[layer_idx].numpy()
-    abs_weights = np.abs(weights)
+    abs_weights = weights
+    #abs_weights = np.abs(weights)
 
-    plt.figure(figsize=figsize)
-    plt.hist(abs_weights, bins=bins, edgecolor='black')
+    plt.figure(figsize=(10, 6))
+    plt.hist(abs_weights, bins=50, edgecolor='black')
 
     # Add vertical line at mean and median
     mean_val = np.mean(abs_weights)
@@ -100,9 +106,10 @@ def plot_weight_histogram(model, layer_idx, bins=50, figsize=(10, 6)):
     plt.axvline(median_val, color='green', linestyle='dashed', linewidth=2, label=f'Median: {median_val:.4f}')
 
     plt.title(f'Layer {layer_idx} Weight Magnitude Distribution\n'
-              f'Shape: {model.W_shapes[layer_idx]}, '
-              f'Non-zero weights: {len(weights)}/{np.prod(model.W_shapes[layer_idx])} '
-              f'({len(weights) / np.prod(model.W_shapes[layer_idx]):.2%})')
+              f'it: {it}, '
+              #f'Non-zero weights: {len(weights)}/{np.prod(model.W_shapes[layer_idx])} '
+              #f'({len(weights) / np.prod(model.W_shapes[layer_idx]):.2%})'
+              )
     plt.xlabel('Absolute Weight Value')
     plt.ylabel('Count')
     plt.legend()
@@ -110,9 +117,23 @@ def plot_weight_histogram(model, layer_idx, bins=50, figsize=(10, 6)):
     plt.show()
 
     # Print some statistics
-    print(f"Layer {layer_idx} Weight Statistics:")
+    '''print(f"Layer {layer_idx} Weight Statistics:")
     print(f"  Min: {np.min(abs_weights):.6f}")
     print(f"  Max: {np.max(abs_weights):.6f}")
     print(f"  Mean: {mean_val:.6f}")
     print(f"  Median: {median_val:.6f}")
-    print(f"  Std Dev: {np.std(abs_weights):.6f}")
+    print(f"  Std Dev: {np.std(abs_weights):.6f}")'''
+
+
+def print_layer_sparsity(model):
+    """Prints the sparsity percentage for each layer in the model"""
+    print("\nLayer Sparsity:")
+    for i in range(model.num_layers):
+        nnz = v4.get_num_nonzero_weights(i, model)
+        total = model.W_shapes[i][0] * model.W_shapes[i][1]
+        sparsity = 100.0 * (1.0 - nnz/total)
+        print(f"Layer {i}: {sparsity:.2f}% sparse ({nnz}/{total} non-zero weights)")
+    total_nnz = v4.get_total_nonzero_weights(model)
+    total_weights = sum(shape[0]*shape[1] for shape in model.W_shapes)
+    overall_sparsity = 100.0 * (1.0 - total_nnz/total_weights)
+    print(f"Overall: {overall_sparsity:.2f}% sparse ({total_nnz}/{total_weights} non-zero weights)")

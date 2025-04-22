@@ -1,13 +1,13 @@
 import os
 import sys
-from guppy import hpy
+#from guppy import hpy
 import time
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
 from cnn_utils import *
-from memory_profiler import profile
-from memory_profiler import memory_usage
+#from memory_profiler import profile
+#from memory_profiler import memory_usage
 
 from utils import *
 np.set_printoptions(threshold=np.inf)
@@ -132,40 +132,28 @@ class DenseFFN(tf.Module):
                 out = tf.nn.relu(out)
         return out
 
-def prune_layer_old(i,momenta,model):
-    # ascending
-    idx = tf.argsort(tf.math.abs(momenta[i]))
-    momentum_sorted = tf.gather(momenta[i], idx)
-    indices_sorted = tf.gather(model.W_indices[i], idx)
-    values_sorted = tf.gather(model.W_values[i], idx)
-
-    split_idx = tf.shape(momentum_sorted)[0] // 2
-    #split_idx = 3
-
-    indices_new = indices_sorted[split_idx:]
-    values_new = values_sorted[split_idx:]
-    momentum_new = momentum_sorted[split_idx:]
-
-    model.W_indices[i]=indices_new
-    #model.W_values[i]=values_new
-    #model.W_values[i].assign(values_new)
-    model.W_values[i] = tf.Variable(values_new, name=f"W{i + 1}_values", trainable=True)
-
-    return split_idx.numpy()
 
 #TODO: serve fare tf.constant quando si creano nuovi indici?
 def prune_layer(i, model):
 
-    # Sort by absolute weight values (ascending)
+    #plot_weight_histogram(model,i,50)
     idx = tf.argsort(tf.math.abs(model.W_values[i]))
 
     values_sorted =  tf.gather(model.W_values[i], idx)
     indices_sorted = tf.gather(model.W_indices[i], idx)
 
+
     split_idx = tf.shape(values_sorted)[0] // 2
 
     indices_new = indices_sorted[split_idx:]
     values_new = values_sorted[split_idx:]
+
+    values_scartati = values_sorted[0:split_idx].numpy()
+    abs_values_scartati = np.abs(values_scartati)
+    mean_scartati = np.mean(abs_values_scartati)
+    max_scartati = np.max(abs_values_scartati)
+    print(f"Layer i: {i}, Num Scartati: {len(values_scartati)},  Media scartati: {mean_scartati:.3f}, Max scartati: {max_scartati:.3f}")
+
 
 
     model.W_indices[i] = indices_new
@@ -199,7 +187,7 @@ def prune(model,verbose):
 def regrow(model, momenta, to_regrow, layers,verbose=False):
     nnz_before = get_total_nonzero_weights(model)
     true_prop_contributions = get_contributions(layers, momenta)
-    #print(true_prop_contributions)
+    print(true_prop_contributions)
     tot_regrown = 0
     remaining = to_regrow
 
@@ -267,6 +255,7 @@ def regrow_layer(i, model, desired_growth):
     new_indices = tf.constant(chosen, dtype=tf.int64)
     #new_values = tf.random.normal([actual_regrow])
     new_values = tf.zeros([actual_regrow])
+    #new_values = tf.random.truncated_normal([actual_regrow],mean = 0, stddev = 0.01)
 
     model.W_indices[i] = tf.concat([model.W_indices[i], new_indices], axis=0)
     model.W_values[i] = tf.Variable(tf.concat([model.W_values[i], new_values], axis=0),
@@ -277,7 +266,7 @@ def regrow_layer(i, model, desired_growth):
 def prune_and_regrow(model,momenta,debdt):
     tot_pruned = prune( model, verbose=False)
     debdt = regrow(model, momenta, tot_pruned+debdt, [l for l in range(model.num_layers)])
-    #print("tot nonzero weights: ", get_total_nonzero_weights(model))
+    print("tot nonzero weights: ", get_total_nonzero_weights(model))
     return debdt
 
 
@@ -320,13 +309,12 @@ def get_contributions(layers, momenta):
     return momentum_contribution
 
 
-def train(model, X, y, epochs, batch_size,lr ):
+def train(model, X, y, epochs, batch_size,lr ,prune_and_regrow_step ):
     start_time = time.time()
     debdt=0
     it = 0
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
     loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
-    momenta = []
     dataset = tf.data.Dataset.from_tensor_slices((X, y)).batch(batch_size)
     for epoch in range(epochs):
         print(f"\nEpoch {epoch + 1}")
@@ -343,25 +331,44 @@ def train(model, X, y, epochs, batch_size,lr ):
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
 
             if step % 1 == 0:
-                test(model,X,y)
+                acc = test(model,X,y)
+                print(f"it: {it}, acc: {acc:.3f}")
                 #print(f"Step {step:03d} | Loss: {loss:.4f}")
                 #print(mem_usage())
                 #print("--- %s seconds ---" % (time.time() - start_time))
-
                 #exit(-1)
                 #print("W1_values:", model.W1_values.numpy())
-            if it % 10 == 0:
+
+            if it % prune_and_regrow_step == 0:
+                #plot_weight_histogram(model,model.num_layers-1)
+                #plot_weight_histogram_all(model,f"before {it}")
+                #TODO: W_momentum
+                momenta = []
+                velocities = []
+
+                #https://github.com/keras-team/keras/blob/v3.3.3/keras/src/optimizers/base_optimizer.py#L567-L583
                 print("prune & regrow")
+                #beta1 = 0.9
+                #beta2 = 0.999
+                #momentum_correction = 1-beta1**prune_and_regrow_step
+                #velocity_correction = 1-beta2**prune_and_regrow_step
                 for var in optimizer.variables:
                     if 'W' in var.path and 'momentum' in var.path:
                         momenta.append(var.value)
+                    #if 'W' in var.path and 'velocity' in var.path:
+                    #    velocities.append(var.value)
+
+                #for i in range(model.num_layers):
+                #    momenta[i] = momenta[i]/(velocities[i] + optimizer.epsilon)
+
 
                 debdt=prune_and_regrow(model,momenta,debdt)
+                print_layer_sparsity(model)
+                #plot_weight_histogram_all(model,f"after {it}")
 
 
                 optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
-                momenta=[]
-                pass
+                momenta = []
 
 
 
@@ -370,7 +377,7 @@ def test(model, X, y):
     preds = tf.argmax(logits, axis=1)
     true_labels = tf.argmax(y, axis=1)
     accuracy = tf.reduce_mean(tf.cast(tf.equal(preds, true_labels), tf.float32))
-    print(accuracy.numpy())
+    return accuracy.numpy()
 
 
 #TODO: capire. perchè hidden_dim = 1 dà problemi
@@ -383,11 +390,13 @@ def main():
 
     #X_train, y_train = generate_data(samples = 100, features=num_features, classes=num_classes)
 
-    model = FFNsSparse3(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes,num_hidden_layers=num_hidden_layers, sparsity=0.9)
+    model = FFNsSparse3(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes,
+                        num_hidden_layers=num_hidden_layers, sparsity=0.9)
     #model = DenseFFN(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes, num_hidden_layers=num_hidden_layers)
 
     t = model.trainable_variables
-    train(model, X_train, y_train,epochs=500, batch_size=128,lr= 0.01)
+    train(model, X_train, y_train,epochs=500, batch_size=128,lr= 0.01,
+          prune_and_regrow_step=3)
 
 
 if __name__ == '__main__':
