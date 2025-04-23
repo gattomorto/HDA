@@ -189,16 +189,5 @@ E se provassi ad usare assign() su sparse tensor per modificare il valore invece
 
 da qualche parte uso vettoru numpy, da qualche altra parte vettrori std di python -- deve essere uniforme
 
-0.06598333
-0.066583335
-0.06836667
-0.07061667
-0.07371667
-0.07666667
-0.08011667
-0.08348333
-0.08703333
-0.09065
-0.094733335
-0.0993
-0.10355
+https://github.com/tensorflow/tensorflow/issues/46089
+https://github.com/tensorflow/tensorflow/issues/46706

@@ -5,6 +5,8 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
+from tensorflow.python.ops.gen_sparse_ops import sparse_reorder
+
 from cnn_utils import *
 #from memory_profiler import profile
 #from memory_profiler import memory_usage
@@ -79,15 +81,15 @@ class FFNsSparse3(tf.Module):
             self.W_shapes[i] = shape
             self.b[i] = tf.Variable(tf.zeros([1,out_dim]), name=f"b{i}")
 
-
+    # out è denso, quindi cmq vai a caricare una matrice intera in memoria
+    # TODO: studia grad_a, e grad_b di matmul
     def __call__(self, X):
         out = X
         for i in range(self.num_layers):
             W = tf.sparse.SparseTensor(indices=self.W_indices[i], values=self.W_values[i], dense_shape=self.W_shapes[i])
-            out = tf.sparse.sparse_dense_matmul(out,W)
 
-            #Wd = tf.sparse.to_dense(W)
-            #out = tf.matmul(Wd, out)
+            #out = tf.sparse.sparse_dense_matmul(out,W)
+            out = tf.matmul(out,tf.sparse.to_dense(W),b_is_sparse=True)
 
             out = out + self.b[i]
             if i < self.num_layers - 1:
@@ -98,12 +100,7 @@ class FFNsSparse3(tf.Module):
 
 class DenseFFN(tf.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_hidden_layers):
-        """
-        input_dim: int
-        hidden_dim: int (used for all hidden layers)
-        output_dim: int
-        num_hidden_layers: int (number of hidden layers)
-        """
+
         super().__init__(name=None)
 
         self.num_layers = num_hidden_layers + 1  # hidden layers + output layer
@@ -143,7 +140,7 @@ def prune_layer(i, model):
     indices_sorted = tf.gather(model.W_indices[i], idx)
 
 
-    split_idx = tf.shape(values_sorted)[0] // 2
+    split_idx = tf.shape(values_sorted)[0] // 30
 
     indices_new = indices_sorted[split_idx:]
     values_new = values_sorted[split_idx:]
@@ -233,8 +230,6 @@ def regrow(model, momenta, to_regrow, layers,verbose=False):
 
 
 
-
-#TODO: riordinare gli indici?!
 def regrow_layer(i, model, desired_growth):
 
     shape = model.W_shapes[i]
@@ -261,7 +256,19 @@ def regrow_layer(i, model, desired_growth):
     model.W_values[i] = tf.Variable(tf.concat([model.W_values[i], new_values], axis=0),
                                     name=f"W{i}_values", trainable=True)
 
+    reorder_indices_and_values(model,i)
+
     return actual_regrow
+
+#TODO: cosa fare con import? perchè non ce tf. davanti
+def reorder_indices_and_values(model,i):
+    indices = model.W_indices[i]
+    values = model.W_values[i]
+    from tensorflow.python.ops import gen_sparse_ops
+    xx = sparse_reorder(indices,values,model.W_shapes[i])
+    model.W_indices[i] = xx.output_indices
+    model.W_values[i].assign(xx.output_values)
+
 
 def prune_and_regrow(model,momenta,debdt):
     tot_pruned = prune( model, verbose=False)
@@ -396,7 +403,7 @@ def main():
 
     t = model.trainable_variables
     train(model, X_train, y_train,epochs=500, batch_size=128,lr= 0.01,
-          prune_and_regrow_step=3)
+          prune_and_regrow_step=155)
 
 
 if __name__ == '__main__':
