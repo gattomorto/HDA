@@ -5,7 +5,8 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
-from tensorflow.python.ops.gen_sparse_ops import sparse_reorder
+#from keras.src.backend.tensorflow.sparse import sparse_to_dense
+from tensorflow.python.ops.gen_sparse_ops import sparse_reorder, sparse_tensor_dense_mat_mul, sparse_to_dense
 
 from cnn_utils import *
 #from memory_profiler import profile
@@ -52,10 +53,11 @@ def random_sparse_indices2(shape, sparsity, seed=None):
 # è come FFNsSparse, tranne che si aspetta X (batch_size, input_dim)
 #TODO: set indices, set values
 #TODO: sono sicuro che indices deve essere tf.Constant anche se viene modificato in prune & regrow?
-class FFNsSparse3(tf.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_hidden_layers, sparsity=0.0):
+class FFNsSparse(tf.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_hidden_layers, sparsity=0.0,option ='B'):
 
         super().__init__(name=None)
+        self.option = option
 
         self.sparsity = sparsity
         self.num_layers = num_hidden_layers + 1  # hidden layers + output layer
@@ -86,10 +88,22 @@ class FFNsSparse3(tf.Module):
     def __call__(self, X):
         out = X
         for i in range(self.num_layers):
-            W = tf.sparse.SparseTensor(indices=self.W_indices[i], values=self.W_values[i], dense_shape=self.W_shapes[i])
-
-            #out = tf.sparse.sparse_dense_matmul(out,W)
-            out = tf.matmul(out,tf.sparse.to_dense(W),b_is_sparse=True)
+            #13s 13 14 14 27 21 22
+            if self.option == 'A1':
+                W = tf.sparse.SparseTensor(indices=self.W_indices[i], values=self.W_values[i], dense_shape=self.W_shapes[i])
+                out = tf.sparse.sparse_dense_matmul(out,W)
+            #22 14 9 12 12 12 14 14 8 8 8 8 13 13 10 10 18 13 13 11
+            elif self.option == 'B1':
+                W = tf.sparse.SparseTensor(indices=self.W_indices[i], values=self.W_values[i], dense_shape=self.W_shapes[i])
+                W = tf.sparse.to_dense(W,validate_indices=False)
+                # b_is_sparse dà warning
+                out = tf.matmul(out,W,b_is_sparse=True)
+            #9s 11s 18s 12s 15s 14s 8 8 8 10 10 11 11 10 13
+            elif self.option == 'B2':
+                W = sparse_to_dense(self.W_indices[i], self.W_shapes[i], self.W_values[i],
+                                     default_value=0,
+                                     validate_indices=False)
+                out = tf.matmul(out,W,b_is_sparse=True)
 
             out = out + self.b[i]
             if i < self.num_layers - 1:
@@ -97,7 +111,63 @@ class FFNsSparse3(tf.Module):
 
         return out
 
+class FFNsSparse_REVERSED(tf.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_hidden_layers, sparsity=0.0,option = 'B'):
 
+        super().__init__(name=None)
+        self.option = option
+        self.sparsity = sparsity
+        self.num_layers = num_hidden_layers + 1  # hidden layers + output layer
+
+        # Dimensions for each layer
+        layer_dims = [input_dim] + [hidden_dim] * num_hidden_layers + [output_dim]
+
+        self.W_indices = []
+        self.W_values = []
+        self.W_shapes = []
+        self.b = []
+
+        for i in range(self.num_layers):
+            in_dim = layer_dims[i]
+            out_dim = layer_dims[i + 1]
+            shape = [out_dim, in_dim]
+
+            indices, nnz = random_sparse_indices2(shape, sparsity=sparsity, seed=i)
+            values = tf.Variable(tf.random.normal([nnz]), name=f"W{i}_values")
+            bias = tf.Variable(tf.zeros([out_dim, 1]), name=f"b{i}")
+
+            self.W_indices.append(indices)
+            self.W_values.append(values)
+            self.W_shapes.append(shape)
+            self.b.append(bias)
+
+
+    def __call__(self, X):
+        out = X
+        for i in range(self.num_layers):
+            #13 17 13 14 14
+            if self.option == 'A1':
+                W = tf.sparse.SparseTensor(indices=self.W_indices[i], values=self.W_values[i], dense_shape=self.W_shapes[i])
+                out = tf.sparse.sparse_dense_matmul(W, out)
+            #22 15 14 14 14 14
+            elif self.option == 'A2':
+                out = sparse_tensor_dense_mat_mul(self.W_indices[i], self.W_values[i], self.W_shapes[i],out)
+            # 14 13 13 12 12 13
+            elif self.option == 'B1':
+                W = tf.sparse.SparseTensor(indices=self.W_indices[i], values=self.W_values[i], dense_shape=self.W_shapes[i])
+                W = tf.sparse.to_dense(W,validate_indices=False)
+                out = tf.matmul(W, out,a_is_sparse=True)
+            # 15 13 13 13 14 16 14
+            elif self.option == 'B2':
+                W = sparse_to_dense(self.W_indices[i], self.W_shapes[i],self.W_values[i],default_value=0,validate_indices=False)
+                out = tf.matmul(W, out,a_is_sparse=True)
+
+
+            out = out + self.b[i]
+            if i < self.num_layers - 1:
+                out = tf.nn.relu(out)
+
+        return out
 class DenseFFN(tf.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_hidden_layers):
 
@@ -260,11 +330,11 @@ def regrow_layer(i, model, desired_growth):
 
     return actual_regrow
 
-#TODO: cosa fare con import? perchè non ce tf. davanti
+#TODO: cosa fare con import? perchè non ce tf. davanti a sparse_reorder
+#TODO: reorder_weights
 def reorder_indices_and_values(model,i):
     indices = model.W_indices[i]
     values = model.W_values[i]
-    from tensorflow.python.ops import gen_sparse_ops
     xx = sparse_reorder(indices,values,model.W_shapes[i])
     model.W_indices[i] = xx.output_indices
     model.W_values[i].assign(xx.output_values)
@@ -317,7 +387,10 @@ def get_contributions(layers, momenta):
 
 
 def train(model, X, y, epochs, batch_size,lr ,prune_and_regrow_step ):
-    start_time = time.time()
+    #start_time = time.time()
+    start_time = time.process_time()
+    start_time = time.perf_counter()
+
     debdt=0
     it = 0
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
@@ -336,14 +409,18 @@ def train(model, X, y, epochs, batch_size,lr ,prune_and_regrow_step ):
 
             grads = tape.gradient(loss, model.trainable_variables)
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
+            #print(step)
+            if it % 200 == 0:
 
-            if step % 1 == 0:
                 acc = test(model,X,y)
+                #acc = test_transpose(model,X,y)
                 print(f"it: {it}, acc: {acc:.3f}")
                 #print(f"Step {step:03d} | Loss: {loss:.4f}")
                 #print(mem_usage())
                 #print("--- %s seconds ---" % (time.time() - start_time))
-                #exit(-1)
+                print(time.perf_counter() - start_time, "seconds")
+
+                exit(-1)
                 #print("W1_values:", model.W1_values.numpy())
 
             if it % prune_and_regrow_step == 0:
@@ -386,6 +463,14 @@ def test(model, X, y):
     accuracy = tf.reduce_mean(tf.cast(tf.equal(preds, true_labels), tf.float32))
     return accuracy.numpy()
 
+def test_transpose(model, X, y):
+    X_t = tf.transpose(X, perm=[1, 0])
+    logits = model(X_t)
+    logits = tf.transpose(logits, perm=[1, 0])  # per confronto con y
+    correct_preds = tf.equal(tf.argmax(logits, axis=1), tf.argmax(y, axis=1))
+    acc = tf.reduce_mean(tf.cast(correct_preds, tf.float32))
+    return acc.numpy()
+
 
 #TODO: capire. perchè hidden_dim = 1 dà problemi
 def main():
@@ -397,13 +482,15 @@ def main():
 
     #X_train, y_train = generate_data(samples = 100, features=num_features, classes=num_classes)
 
-    model = FFNsSparse3(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes,
-                        num_hidden_layers=num_hidden_layers, sparsity=0.9)
+    model = FFNsSparse(input_dim=num_features, hidden_dim=hidden_dim,output_dim=num_classes,
+                        num_hidden_layers=num_hidden_layers,
+                        sparsity=0.9,
+                        option='B1')
     #model = DenseFFN(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes, num_hidden_layers=num_hidden_layers)
 
     t = model.trainable_variables
     train(model, X_train, y_train,epochs=500, batch_size=128,lr= 0.01,
-          prune_and_regrow_step=155)
+          prune_and_regrow_step=3000)
 
 
 if __name__ == '__main__':

@@ -191,3 +191,26 @@ da qualche parte uso vettoru numpy, da qualche altra parte vettrori std di pytho
 
 https://github.com/tensorflow/tensorflow/issues/46089
 https://github.com/tensorflow/tensorflow/issues/46706
+
+sparse_softmax
+sparse_dense_cwise_mul in un eventuale tua adagrad?
+sparse_concat in regrow_layer?
+serialize_many_sparse?
+
+
+If you would like to define the tensor outside the graph, e.g. define the sparse tensor for later data feed, use SparseTensorValue. In contrast, if the sparse tensor is defined in graph, use SparseTensor
+
+sparse_tensor_dense_mat_mul vanno bene indici int32
+
+
+x = tf.keras.Input(shape=(4,), sparse=True)
+y = tf.keras.layers.Dense(4)(x)
+model = tf.keras.Model(x, y)
+sparse_data = tf.sparse.SparseTensor(
+    indices = [(0,0),(0,1),(0,2),
+               (4,3),(5,0),(5,1)],
+    values = [1,1,1,1,1,1],
+    dense_shape = (6,4)
+)
+model(sparse_data)
+model.predict(sparse_data)
