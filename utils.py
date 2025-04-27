@@ -52,23 +52,33 @@ def generate_data(samples, features, classes, noise_std=0.1):
     return X, Y
 
 
-def load_mnist_data():
-    # Load MNIST dataset
+def load_mnist_data(flatten=False):
+    add_channel = True
+    if flatten:
+        add_channel = False
+
     (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
 
     # Normalize pixel values to be between 0 and 1
     x_train = x_train.astype('float32') / 255.0
     x_test = x_test.astype('float32') / 255.0
 
-    # Flatten the images
-    x_train = x_train.reshape((x_train.shape[0], -1))
-    x_test = x_test.reshape((x_test.shape[0], -1))
+    if flatten:
+        # Flatten the images to [batch_size, 784]
+        x_train = x_train.reshape((x_train.shape[0], -1))
+        x_test = x_test.reshape((x_test.shape[0], -1))
+    elif add_channel:
+        # Add a channel dimension to get shape [batch_size, 28, 28, 1]
+        x_train = x_train[..., tf.newaxis]
+        x_test = x_test[..., tf.newaxis]
+    # else: keep shape [batch_size, 28, 28] (no flattening, no channel added)
 
     # Convert labels to one-hot encoding
     y_train = tf.keras.utils.to_categorical(y_train, 10)
     y_test = tf.keras.utils.to_categorical(y_test, 10)
 
     return (x_train, y_train), (x_test, y_test)
+
 
 
 import matplotlib.pyplot as plt

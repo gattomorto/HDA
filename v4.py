@@ -173,7 +173,7 @@ class DenseFFN(tf.Module):
 
         super().__init__(name=None)
 
-        self.num_layers = num_hidden_layers + 1  # hidden layers + output layer
+        self.num_layers = num_hidden_layers + 1
 
         # Dimensions for each layer
         layer_dims = [input_dim] + [hidden_dim] * num_hidden_layers + [output_dim]
@@ -198,6 +198,63 @@ class DenseFFN(tf.Module):
             if i < self.num_layers - 1:
                 out = tf.nn.relu(out)
         return out
+class ConvDeepNN(tf.Module):
+    def __init__(self, num_classes=10):
+        super().__init__(name=None)
+
+        # ---- Convolutional Layer 1 ----
+        in_chan1 = 1
+        out_chan1 = 5
+        self.conv1_w = tf.Variable(
+            tf.random.normal([3, 3, in_chan1, out_chan1], stddev=0.1), name="conv1_w"
+        )
+        self.conv1_b = tf.Variable(tf.zeros([out_chan1]), name="conv1_b")
+
+        # ---- Convolutional Layer 2 ----
+        in_chan2 = out_chan1
+        out_chan2 = 8
+        self.conv2_w = tf.Variable(
+            tf.random.normal([3, 3, in_chan2, out_chan2], stddev=0.1), name="conv2_w"
+        )
+        self.conv2_b = tf.Variable(tf.zeros([out_chan2]), name="conv2_b")
+
+        # ---- Fully Connected Layers ----
+        self.fc1_w = tf.Variable(
+            tf.random.normal([7*7*out_chan2, 128], stddev=0.1), name="fc1_w"
+        )
+        self.fc1_b = tf.Variable(tf.zeros([128]), name="fc1_b")
+
+        self.fc2_w = tf.Variable(
+            tf.random.normal([128, num_classes], stddev=0.1), name="fc2_w"
+        )
+        self.fc2_b = tf.Variable(tf.zeros([num_classes]), name="fc2_b")
+
+    def __call__(self, x):
+        # x: [batch_size, 28, 28, 1]
+
+        # ---- Conv Layer 1 + ReLU + MaxPool ----
+        x = tf.nn.conv2d(x, self.conv1_w, strides=1, padding='SAME')
+        x = tf.nn.bias_add(x, self.conv1_b)
+        x = tf.nn.relu(x)
+        x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')  # [batch, 14, 14, 32]
+
+        # ---- Conv Layer 2 + ReLU + MaxPool ----
+        x = tf.nn.conv2d(x, self.conv2_w, strides=1, padding='SAME')
+        x = tf.nn.bias_add(x, self.conv2_b)
+        x = tf.nn.relu(x)
+        x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')  # [batch, 7, 7, 64]
+
+        # ---- Flatten ----
+        x = tf.reshape(x, [x.shape[0], -1])  # [batch, 7*7*64]
+
+        # ---- Dense Layer + ReLU ----
+        x = tf.matmul(x, self.fc1_w) + self.fc1_b
+        x = tf.nn.relu(x)
+
+        # ---- Output Layer (logits) ----
+        logits = tf.matmul(x, self.fc2_w) + self.fc2_b
+
+        return logits
 
 
 #TODO: serve fare tf.constant quando si creano nuovi indici?
@@ -208,7 +265,6 @@ def prune_layer(i, model):
 
     values_sorted =  tf.gather(model.W_values[i], idx)
     indices_sorted = tf.gather(model.W_indices[i], idx)
-
 
     split_idx = tf.shape(values_sorted)[0] // 30
 
@@ -387,8 +443,6 @@ def get_contributions(layers, momenta):
 
 
 def train(model, X, y, epochs, batch_size,lr ,prune_and_regrow_step ):
-    #start_time = time.time()
-    start_time = time.process_time()
     start_time = time.perf_counter()
 
     debdt=0
@@ -410,17 +464,16 @@ def train(model, X, y, epochs, batch_size,lr ,prune_and_regrow_step ):
             grads = tape.gradient(loss, model.trainable_variables)
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
             #print(step)
-            if it % 200 == 0:
+            if it % 1 == 0:##
 
                 acc = test(model,X,y)
                 #acc = test_transpose(model,X,y)
                 print(f"it: {it}, acc: {acc:.3f}")
                 #print(f"Step {step:03d} | Loss: {loss:.4f}")
                 #print(mem_usage())
-                #print("--- %s seconds ---" % (time.time() - start_time))
-                print(time.perf_counter() - start_time, "seconds")
+                #print(time.perf_counter() - start_time, "seconds")
 
-                exit(-1)
+                #exit(-1)
                 #print("W1_values:", model.W1_values.numpy())
 
             if it % prune_and_regrow_step == 0:
@@ -478,18 +531,21 @@ def main():
     num_classes = 10
     hidden_dim = 256
     num_hidden_layers = 5
-    (X_train,y_train),(X_test,y_test)= load_mnist_data()
+    (X_train,y_train),(X_test,y_test)= load_mnist_data(flatten=False)
 
     #X_train, y_train = generate_data(samples = 100, features=num_features, classes=num_classes)
 
-    model = FFNsSparse(input_dim=num_features, hidden_dim=hidden_dim,output_dim=num_classes,
-                        num_hidden_layers=num_hidden_layers,
-                        sparsity=0.9,
-                        option='B1')
+    model = FFNsSparse(input_dim=num_features,
+                       hidden_dim=hidden_dim,
+                       output_dim=num_classes,
+                       num_hidden_layers=num_hidden_layers,
+                       sparsity=0.9,
+                       option='B1')
     #model = DenseFFN(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes, num_hidden_layers=num_hidden_layers)
 
+    model = ConvDeepNN(num_classes= 10)
     t = model.trainable_variables
-    train(model, X_train, y_train,epochs=500, batch_size=128,lr= 0.01,
+    train(model, X_train, y_train,epochs=500, batch_size=32,lr= 0.01,
           prune_and_regrow_step=3000)
 
 
