@@ -214,3 +214,5 @@ sparse_data = tf.sparse.SparseTensor(
 )
 model(sparse_data)
 model.predict(sparse_data)
+
+fare anche l'output sparso?
