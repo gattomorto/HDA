@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from functools import reduce
-
+import math
 
 # c_in = 1, c_out = 1, Q dense
 def dense_to_sparse(X,Q):
@@ -1066,6 +1066,195 @@ def conv_sparse_fast_D8(X, Q_sp):
     result_final = tf.transpose(result_reshaped, perm=[3, 1, 2, 0])
     return result_final
 
+########################################################################
+
+# conv_sparse_fast8 & padding = same
+def conv_sparse_fast8_padding(X, Q_sp):
+    N, H, W, C = X.shape
+    K = Q_sp.dense_shape[0]
+    C_out = Q_sp.dense_shape[3]
+
+    # Calculate padding
+    pad_total = K - 1
+    pad_top = pad_total // 2
+    pad_bottom = pad_total - pad_top
+    pad_left = pad_total // 2
+    pad_right = pad_total - pad_left
+
+    # Apply symmetric padding
+    X_padded = tf.pad(
+        X,
+        paddings=[[0, 0], [pad_top, pad_bottom], [pad_left, pad_right], [0, 0]],
+        mode='CONSTANT',
+        constant_values=0
+    )
+
+    # New H and W after padding
+    H_pad = H + pad_top + pad_bottom
+    W_pad = W + pad_left + pad_right
+
+    # Generate sparse convolution matrix
+    S = sparse_to_sparse_fast8(X_padded, Q_sp)
+
+    # Flatten and reshape input
+    X_perm = tf.transpose(X_padded, perm=[3, 1, 2, 0])  # [C, H_pad, W_pad, N]
+    X_flat = tf.reshape(X_perm, [C * H_pad * W_pad, N])  # [C*H_pad*W_pad, N]
+
+    # Perform sparse matrix multiplication
+    result_dense = tf.sparse.sparse_dense_matmul(S, X_flat)  # [C_out * H * W, N]
+
+    # Reshape result to output shape: [N, H, W, C_out]
+    result_reshaped = tf.reshape(result_dense, [C_out, H, W, N])
+    result_final = tf.transpose(result_reshaped, perm=[3, 1, 2, 0])  # [N, H, W, C_out]
+
+    return result_final
+
+# conv_sparse_fast8 con padding che è un parametro
+def conv_sparse_fast8_padding_v2(X, Q_sp, padding="VALID"):
+    assert padding in ("VALID", "SAME"), "padding must be 'valid' or 'same'"
+
+    N, H, W, C = X.shape
+    K = Q_sp.dense_shape[0]
+    C_out = Q_sp.dense_shape[3]
+
+    if padding == "SAME":
+        # Calculate symmetric padding
+        pad_total = K - 1
+        pad_top = pad_total // 2
+        pad_bottom = pad_total - pad_top
+        pad_left = pad_total // 2
+        pad_right = pad_total - pad_left
+
+        # Apply padding to input
+        X = tf.pad(
+            X,
+            paddings=[[0, 0], [pad_top, pad_bottom], [pad_left, pad_right], [0, 0]],
+            mode='CONSTANT',
+            constant_values=0
+        )
+
+        H_out, W_out = H, W
+    else:  # "VALID"
+        H_out = H - K + 1
+        W_out = W - K + 1
+
+    # Create sparse convolution matrix
+    S = sparse_to_sparse_fast8(X, Q_sp)
+
+    # Flatten input
+    N, H_pad, W_pad, C = X.shape
+    X_perm = tf.transpose(X, perm=[3, 1, 2, 0])  # [C, H_pad, W_pad, N]
+    X_flat = tf.reshape(X_perm, [C * H_pad * W_pad, N])  # [C*H_pad*W_pad, N]
+
+    # Multiply
+    result_dense = tf.sparse.sparse_dense_matmul(S, X_flat)  # [C_out * H_out * W_out, N]
+
+    # Reshape result
+    result_reshaped = tf.reshape(result_dense, [C_out, H_out, W_out, N])
+    result_final = tf.transpose(result_reshaped, perm=[3, 1, 2, 0])  # [N, H_out, W_out, C_out]
+
+    return result_final
+
+#########################################################################
+
+# conv_sparse_fast8 con padding & stride
+def sparse_to_sparse_fast8_stride(X, Q_sp, stride, OH, OW):
+    batch_size, H, W, C_in = X.shape
+    KH, KW, Q_cin, Q_cout = Q_sp.dense_shape
+    KH, KW, Q_cin, Q_cout = map(int, [KH, KW, Q_cin, Q_cout])
+    assert C_in == Q_cin, "Input channels in X and Q must match"
+
+    num_rows_per_output = OH * OW
+    total_output_rows = num_rows_per_output * Q_cout
+    total_output_cols = H * W * C_in
+
+    if tf.shape(Q_sp.indices)[0] == 0:
+        return tf.sparse.SparseTensor(
+            indices=tf.zeros([0, 2], dtype=tf.int64),
+            values=tf.zeros([0], dtype=tf.float32),
+            dense_shape=[total_output_rows, total_output_cols]
+        )
+
+    # Patch top-left positions with stride
+    r0 = tf.range(0, H - KH + 1, stride, dtype=tf.int64)
+    c0 = tf.range(0, W - KW + 1, stride, dtype=tf.int64)
+    rr, cc = tf.meshgrid(r0, c0, indexing='ij')
+    patch_r = tf.reshape(rr, [-1])  # [P]
+    patch_c = tf.reshape(cc, [-1])  # [P]
+    num_patches = tf.shape(patch_r)[0]
+
+    # Extract and cast Q components
+    Q_indices = tf.cast(Q_sp.indices, tf.int64)
+    r_idxs, c_idxs, in_chs, out_chs = tf.unstack(Q_indices, axis=1)
+    vals = Q_sp.values
+
+    # Compute indices using broadcasting
+    patch_r_exp = tf.expand_dims(patch_r, 1)
+    patch_c_exp = tf.expand_dims(patch_c, 1)
+    patch_ids_exp = tf.range(num_patches, dtype=tf.int64)[:, None]
+
+    row_ids = patch_ids_exp + out_chs * num_rows_per_output
+    col_ids = ((patch_r_exp + r_idxs) * W +
+               (patch_c_exp + c_idxs) +
+               in_chs * H * W)
+
+    row_ids_flat = tf.reshape(row_ids, [-1])
+    col_ids_flat = tf.reshape(col_ids, [-1])
+
+    vals_flat = tf.reshape(vals, [1, -1]) * tf.ones([num_patches, 1], dtype=tf.float32)
+    vals_flat = tf.reshape(vals_flat, [-1])
+
+    final_indices = tf.stack([row_ids_flat, col_ids_flat], axis=1)
+
+    return tf.sparse.SparseTensor(
+        indices=final_indices,
+        values=vals_flat,
+        dense_shape=[total_output_rows, total_output_cols]
+    )
+def conv_sparse_fast8_padding_v2_stride(X, Q_sp, padding="VALID", stride=1):
+    # In TensorFlow (and many deep learning frameworks), the "SAME" padding is designed to ensure the output shape is ceil(input / stride)
+    assert padding in ("VALID", "SAME"), "padding must be 'VALID' or 'SAME'"
+
+    N, H, W, C = X.shape
+    K = int(Q_sp.dense_shape[0])
+    C_out = int(Q_sp.dense_shape[3])
+
+    if padding == "SAME":
+        H_out = math.ceil(H / stride)
+        W_out = math.ceil(W / stride)
+
+        pad_along_height = max((H_out - 1) * stride + K - H, 0)
+        pad_along_width = max((W_out - 1) * stride + K - W, 0)
+
+        pad_top = pad_along_height // 2
+        pad_bottom = pad_along_height - pad_top
+        pad_left = pad_along_width // 2
+        pad_right = pad_along_width - pad_left
+
+        X = tf.pad(
+            X,
+            paddings=[[0, 0], [pad_top, pad_bottom], [pad_left, pad_right], [0, 0]],
+            mode='CONSTANT',
+            constant_values=0
+        )
+    else:  # VALID
+        H_out = (H - K) // stride + 1
+        W_out = (W - K) // stride + 1
+
+    # Generate sparse convolution matrix
+    S = sparse_to_sparse_fast8_stride(X, Q_sp, stride=stride, OH=H_out, OW=W_out)
+
+    N, H_pad, W_pad, C = X.shape
+    X_perm = tf.transpose(X, perm=[3, 1, 2, 0])  # [C, H_pad, W_pad, N]
+    X_flat = tf.reshape(X_perm, [C * H_pad * W_pad, N])  # [C*H_pad*W_pad, N]
+
+    # Apply sparse matmul
+    result_dense = tf.sparse.sparse_dense_matmul(S, X_flat)  # [C_out * H_out * W_out, N]
+
+    result_reshaped = tf.reshape(result_dense, [C_out, H_out, W_out, N])
+    result_final = tf.transpose(result_reshaped, perm=[3, 1, 2, 0])  # [N, H_out, W_out, C_out]
+
+    return result_final
 
 
 

@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 import conv
 import time
+import random
 
 
 class Regrow(unittest.TestCase):
@@ -983,9 +984,151 @@ class Conv(unittest.TestCase):
 
             self.assertTrue(close)
 
+    ################################################################
+
+    # conv_sparse_fast8 & padding = same
+    def test_conv_sparse_fast8_padding(self):
+        num_tests = 10000
+        max_size = 244
+        min_size = 50
+        min_k = 2
+        max_k = 7
+        num_channels_in = 1
+        num_channels_out = 10
+        N_max = 29
+        N_min = 2
+
+        for _ in range(num_tests):
+            N = np.random.randint(N_min,N_max+1)
+            H = np.random.randint(min_size, max_size + 1)
+            W = np.random.randint(min_size, max_size + 1)
+            K = np.random.randint(min_k, min(max_k, H, W) + 1)  # Ensure kernel isn't larger than either dimension
+            X = tf.constant(np.random.randn(N, H, W, num_channels_in).astype(np.float32))
+
+            sparsity = 0.9
+            Q_dense = np.random.randn(K, K, num_channels_in, num_channels_out).astype(np.float32)
+            mask = np.random.rand(K, K, num_channels_in, num_channels_out) > sparsity  # Random mask for sparsity
+            Q_dense = tf.convert_to_tensor(Q_dense * mask)  # Apply sparsity
+            Q_sp = tf.sparse.from_dense(Q_dense)
+
+            print("inizio tf")
+            tf_out = tf.nn.conv2d(X, Q_dense, strides=1, padding="SAME")  # [1, H', W', 1]
+            print("fine tf")
+
+            print("inizio custom")
+            custom_out = conv.conv_sparse_fast8_padding(X, Q_sp)
+            print("fine custom")
+
+            close = tf.reduce_all(tf.abs(custom_out - tf_out) < 1e-3)
+
+            if not close:
+                print(tf.reduce_max(tf.abs(custom_out - tf_out)))
+
+            self.assertTrue(close)
+
+    # conv_sparse_fast8 & padding un parametro
+    def test_conv_sparse_fast8_padding_v2(self):
+        num_tests = 10000
+        max_size = 244
+        min_size = 50
+        min_k = 2
+        max_k = 7
+        num_channels_in = 1
+        num_channels_out = 10
+        N_max = 29
+        N_min = 2
+
+        for _ in range(num_tests):
+            N = np.random.randint(N_min,N_max+1)
+            H = np.random.randint(min_size, max_size + 1)
+            W = np.random.randint(min_size, max_size + 1)
+            K = np.random.randint(min_k, min(max_k, H, W) + 1)  # Ensure kernel isn't larger than either dimension
+            X = tf.constant(np.random.randn(N, H, W, num_channels_in).astype(np.float32))
+            padding = "VALID" if random.randint(0, 1) == 0 else "SAME"
+
+            sparsity = 0.91
+            Q_dense = np.random.randn(K, K, num_channels_in, num_channels_out).astype(np.float32)
+            mask = np.random.rand(K, K, num_channels_in, num_channels_out) > sparsity  # Random mask for sparsity
+            Q_dense = tf.convert_to_tensor(Q_dense * mask)  # Apply sparsity
+            Q_sp = tf.sparse.from_dense(Q_dense)
+
+            print("inizio tf")
+            tf_out = tf.nn.conv2d(X, Q_dense, strides=1, padding=padding)  # [1, H', W', 1]
+            print("fine tf")
+
+            print("inizio custom")
+            custom_out = conv.conv_sparse_fast8_padding_v2(X, Q_sp, padding=padding)
+            print("fine custom")
+
+            close = tf.reduce_all(tf.abs(custom_out - tf_out) < 1e-5)
+
+            if not close:
+                print(tf.reduce_max(tf.abs(custom_out - tf_out)))
+
+            self.assertTrue(close)
+    ################################################################
+
+    # versione con padding & stride
+    def test_conv_sparse_fast8_padding_v2_stride(self):
+        SEED = 2
+        tf.random.set_seed(SEED)
+        np.random.seed(SEED)
+        random.seed(SEED)
+
+        num_tests = 10000
+        max_size = 244
+        min_size = 50
+        min_k = 2
+        max_k = 7
+        num_channels_in = 1
+        num_channels_out = 10
+        N_max = 29
+        N_min = 2
+        stride_min = 1
+        stride_max = 7
+
+        for _ in range(num_tests):
+            N = np.random.randint(N_min,N_max+1)
+            H = np.random.randint(min_size, max_size + 1)
+            W = np.random.randint(min_size, max_size + 1)
+            K = np.random.randint(min_k, min(max_k, H, W) + 1)  # Ensure kernel isn't larger than either dimension
+            X = tf.constant(np.random.randn(N, H, W, num_channels_in).astype(np.float32))
+            padding = "VALID" if random.randint(0, 1) == 0 else "SAME"
+            stride = np.random.randint(stride_min, stride_max + 1)
+            #padding= "SAME"
+            #stride = 2
+
+            print(padding)
+            print(stride)
+            print(K)
+            print()
+
+
+
+            sparsity = 0
+            Q_dense = np.random.randn(K, K, num_channels_in, num_channels_out).astype(np.float32)
+            mask = np.random.rand(K, K, num_channels_in, num_channels_out) > sparsity  # Random mask for sparsity
+            Q_dense = tf.convert_to_tensor(Q_dense * mask)  # Apply sparsity
+            Q_sp = tf.sparse.from_dense(Q_dense)
+
+            #print("inizio tf")
+            tf_out = tf.nn.conv2d(X, Q_dense, strides=stride, padding=padding)
+            #print("fine tf")
+
+            #print("inizio custom")
+            custom_out = conv.conv_sparse_fast8_padding_v2_stride(X, Q_sp, padding=padding, stride=stride)
+            #print("fine custom")
+
+            close = tf.reduce_all(tf.abs(custom_out - tf_out) < 1e-4)
+
+            if not close:
+                print(tf.reduce_max(tf.abs(custom_out - tf_out)))
+
+            self.assertTrue(close)
 
 
     ################################################################
+
     def test_time(self):
         num_tests = 10
         max_size = 32
