@@ -1,4 +1,5 @@
 import os
+import random
 import sys
 #from guppy import hpy
 import time
@@ -7,17 +8,19 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 #from keras.src.backend.tensorflow.sparse import sparse_to_dense
 from tensorflow.python.ops.gen_sparse_ops import sparse_reorder, sparse_tensor_dense_mat_mul, sparse_to_dense
-
+import conv
 from cnn_utils import *
 #from memory_profiler import profile
 #from memory_profiler import memory_usage
 
 from utils import *
 np.set_printoptions(threshold=np.inf)
-tf.random.set_seed(0)
-np.random.seed(0)
+SEED = 0
+tf.random.set_seed(SEED)
+np.random.seed(SEED)
+random.seed(SEED)
 
-
+#shape (m,n)
 def random_sparse_indices(shape, sparsity, seed=None):
     import numpy as np
 
@@ -32,6 +35,7 @@ def random_sparse_indices(shape, sparsity, seed=None):
     indices = np.stack(np.unravel_index(chosen, shape), axis=1)
     return tf.constant(indices, dtype=tf.int64),nnz
 
+#shape (m,n) row major
 def random_sparse_indices2(shape, sparsity, seed=None):
     rows, cols = shape
     total = rows * cols
@@ -49,13 +53,30 @@ def random_sparse_indices2(shape, sparsity, seed=None):
 
     return tf.constant(sorted_indices, dtype=tf.int64), nnz
 
+# shape generico row major
+def random_sparse_indices3(shape, sparsity, seed=None):
+    total = np.prod(shape)
+    nnz = int((1.0 - sparsity) * total)  # Number of non-zero elements
+
+    rng = np.random.default_rng(seed)
+    chosen = rng.choice(total, size=nnz, replace=False)
+
+    # Convert flat indices to multi-dimensional indices
+    unraveled = np.stack(np.unravel_index(chosen, shape), axis=-1)  # shape: (nnz, len(shape))
+
+    # Convert multi-dimensional indices back to flat indices in row-major order for sorting
+    flat_sorted_order = np.ravel_multi_index(unraveled.T, shape)
+    sorted_indices = unraveled[np.argsort(flat_sorted_order)]
+
+    return tf.constant(sorted_indices, dtype=tf.int64), nnz
+
+
 
 # è come FFNsSparse, tranne che si aspetta X (batch_size, input_dim)
 #TODO: set indices, set values
 #TODO: sono sicuro che indices deve essere tf.Constant anche se viene modificato in prune & regrow?
 class FFNsSparse(tf.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_hidden_layers, sparsity=0.0,option ='B'):
-
         super().__init__(name=None)
         self.option = option
 
@@ -110,7 +131,6 @@ class FFNsSparse(tf.Module):
                 out = tf.nn.relu(out)
 
         return out
-
 class FFNsSparse_REVERSED(tf.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_hidden_layers, sparsity=0.0,option = 'B'):
 
@@ -198,7 +218,7 @@ class DenseFFN(tf.Module):
             if i < self.num_layers - 1:
                 out = tf.nn.relu(out)
         return out
-class ConvDeepNN(tf.Module):
+class ConvDense(tf.Module):
     def __init__(self, num_classes=10):
         super().__init__(name=None)
 
@@ -209,6 +229,8 @@ class ConvDeepNN(tf.Module):
             tf.random.normal([3, 3, in_chan1, out_chan1], stddev=0.1), name="conv1_w"
         )
         self.conv1_b = tf.Variable(tf.zeros([out_chan1]), name="conv1_b")
+
+
 
         # ---- Convolutional Layer 2 ----
         in_chan2 = out_chan1
@@ -233,7 +255,11 @@ class ConvDeepNN(tf.Module):
         # x: [batch_size, 28, 28, 1]
 
         # ---- Conv Layer 1 + ReLU + MaxPool ----
+        print(mem_usage())
         x = tf.nn.conv2d(x, self.conv1_w, strides=1, padding='SAME')
+        print(mem_usage())
+        print()
+
         x = tf.nn.bias_add(x, self.conv1_b)
         x = tf.nn.relu(x)
         x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')  # [batch, 14, 14, 32]
@@ -243,6 +269,79 @@ class ConvDeepNN(tf.Module):
         x = tf.nn.bias_add(x, self.conv2_b)
         x = tf.nn.relu(x)
         x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')  # [batch, 7, 7, 64]
+
+        # ---- Flatten ----
+        x = tf.reshape(x, [x.shape[0], -1])  # [batch, 7*7*64]
+
+        # ---- Dense Layer + ReLU ----
+        x = tf.matmul(x, self.fc1_w) + self.fc1_b
+        x = tf.nn.relu(x)
+
+        # ---- Output Layer (logits) ----
+        logits = tf.matmul(x, self.fc2_w) + self.fc2_b
+
+        return logits
+
+
+class ConvSparse2(tf.Module):
+    def __init__(self, num_classes=10):
+        super().__init__(name=None)
+        sparsity = 0.9
+
+        # ---- Convolutional Layer 1 ----
+        #self.conv1_w = tf.Variable( tf.random.normal([3, 3, 1, 5], stddev=0.1), name="conv1_w" )
+        self.conv1_shape = [3, 3, 1, 5]
+        self.conv1_indices, conv1_nnz = random_sparse_indices3(self.conv1_shape,sparsity)
+        self.conv1_values = tf.Variable(tf.random.normal([conv1_nnz]), name="conv1_values")
+        self.conv1_b = tf.Variable(tf.zeros([5]), name="conv1_b")
+
+        # ---- Convolutional Layer 2 ----
+        #self.conv2_w = tf.Variable(tf.random.normal([3, 3, 5, 8], stddev=0.1), name="conv2_w")
+        self.conv2_shape = [3, 3, 5, 8]
+        self.conv2_indices, conv2_nnz = random_sparse_indices3(self.conv2_shape,sparsity)
+        self.conv2_values = tf.Variable(tf.random.normal([conv2_nnz]), name="conv2_values")
+        self.conv2_b = tf.Variable(tf.zeros([8]), name="conv2_b")
+
+        # ---- Fully Connected Layers ----
+        self.fc1_w = tf.Variable(tf.random.normal([7 * 7 * 8, 128], stddev=0.1), name="fc1_w")
+        self.fc1_b = tf.Variable(tf.zeros([128]), name="fc1_b")
+
+        self.fc2_w = tf.Variable(tf.random.normal([128, num_classes], stddev=0.1), name="fc2_w")
+        self.fc2_b = tf.Variable(tf.zeros([num_classes]), name="fc2_b")
+
+    def __call__(self, x):
+        conv_fun = conv.conv_sparse_fast8_padding_v2_stride
+        # x: [batch_size, 28, 28, 1]
+
+        # ---- Conv Layer 1 + ReLU + MaxPool ----
+        # x = tf.nn.conv2d(x, self.conv1_w, strides=1, padding='SAME')
+        #conv1_sparse_filter = tf.sparse.from_dense(self.conv1_w)
+        #print(mem_usage())
+        conv1_sparse_filter = tf.SparseTensor(self.conv1_indices, self.conv1_values, self.conv1_shape)
+        x = conv_fun(x, conv1_sparse_filter, padding="SAME", stride=1)
+        #conv1_sparse_dense_filter = tf.sparse.to_dense(conv1_sparse_filter)
+        #x = tf.nn.conv2d(x,conv1_sparse_dense_filter, strides=1, padding='SAME')
+
+        #x = tf.random.normal([32, 28, 28, 5])
+        #print(mem_usage())
+        print()
+
+        x = tf.nn.bias_add(x, self.conv1_b)
+        x = tf.nn.relu(x)
+        x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')  # [batch, 14, 14, 32]
+
+
+        # ---- Conv Layer 2 + ReLU + MaxPool ----
+        # x = tf.nn.conv2d(x, self.conv2_w, strides=1, padding='SAME')
+        #conv2_sparse_filter = tf.sparse.from_dense(self.conv2_w)
+        conv2_sparse_filter = tf.SparseTensor(self.conv2_indices, self.conv2_values, self.conv2_shape)
+        x = conv_fun(x, conv2_sparse_filter, padding="SAME", stride=1)
+
+        x = tf.nn.bias_add(x, self.conv2_b)
+        x = tf.nn.relu(x)
+        x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')  # [batch, 7, 7, 64]
+
+
 
         # ---- Flatten ----
         x = tf.reshape(x, [x.shape[0], -1])  # [batch, 7*7*64]
@@ -441,7 +540,6 @@ def get_contributions(layers, momenta):
 
     return momentum_contribution
 
-
 def train(model, X, y, epochs, batch_size,lr ,prune_and_regrow_step ):
     start_time = time.perf_counter()
 
@@ -465,6 +563,7 @@ def train(model, X, y, epochs, batch_size,lr ,prune_and_regrow_step ):
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
             #print(step)
             if it % 1 == 0:##
+                pass
 
                 acc = test(model,X,y)
                 #acc = test_transpose(model,X,y)
@@ -507,8 +606,6 @@ def train(model, X, y, epochs, batch_size,lr ,prune_and_regrow_step ):
                 optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
                 momenta = []
 
-
-
 def test(model, X, y):
     logits = model(X)
     preds = tf.argmax(logits, axis=1)
@@ -524,7 +621,6 @@ def test_transpose(model, X, y):
     acc = tf.reduce_mean(tf.cast(correct_preds, tf.float32))
     return acc.numpy()
 
-
 #TODO: capire. perchè hidden_dim = 1 dà problemi
 def main():
     num_features = 784
@@ -535,16 +631,18 @@ def main():
 
     #X_train, y_train = generate_data(samples = 100, features=num_features, classes=num_classes)
 
-    model = FFNsSparse(input_dim=num_features,
+    '''model = FFNsSparse(input_dim=num_features,
                        hidden_dim=hidden_dim,
                        output_dim=num_classes,
                        num_hidden_layers=num_hidden_layers,
                        sparsity=0.9,
-                       option='B1')
+                       option='B1')'''
+
     #model = DenseFFN(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes, num_hidden_layers=num_hidden_layers)
 
-    model = ConvDeepNN(num_classes= 10)
-    t = model.trainable_variables
+    #model = ConvDense(num_classes= 10)
+    model = ConvSparse2(num_classes= 10)
+    #t = model.trainable_variables
     train(model, X_train, y_train,epochs=500, batch_size=32,lr= 0.01,
           prune_and_regrow_step=3000)
 

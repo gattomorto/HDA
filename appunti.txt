@@ -216,3 +216,7 @@ model(sparse_data)
 model.predict(sparse_data)
 
 fare anche l'output sparso?
+
+
+tf.raw_ops.SparseTensorDenseMatMul
+

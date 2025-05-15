@@ -1,9 +1,5 @@
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras import layers, models
-from tensorflow.keras.utils import to_categorical
-from tensorflow.keras import optimizers
-from tensorflow.keras.losses import CategoricalCrossentropy
 import random
 
 
@@ -12,16 +8,6 @@ tf.random.set_seed(SEED)
 np.random.seed(SEED)
 random.seed(SEED)
 
-'''
-downsampling si fa con stride = 2
-
-Each bottleneck block has 3 conv layers: 1x1 → 3x3 → 1x1 with a residual connection.
-Skip connection (Add()) either directly passes input or uses a projection (1x1 conv) if dimensions change.
-The number of blocks per stage for ResNet50 is [3, 4, 6, 3].
-
-224/2 = 112
-112/2 = 56
-'''
 
 def load_bloodmnist_224():
     data = np.load("bloodmnist_224.npz")
