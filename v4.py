@@ -1,4 +1,7 @@
 import os
+
+#os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Must be set before importing TensorFlow!
+
 import random
 import sys
 #from guppy import hpy
@@ -9,13 +12,13 @@ import tensorflow as tf
 #from keras.src.backend.tensorflow.sparse import sparse_to_dense
 from tensorflow.python.ops.gen_sparse_ops import sparse_reorder, sparse_tensor_dense_mat_mul, sparse_to_dense
 import conv
-from cnn_utils import *
+import funzioni
 #from memory_profiler import profile
 #from memory_profiler import memory_usage
 
 from utils import *
 np.set_printoptions(threshold=np.inf)
-SEED = 0
+SEED = 2
 tf.random.set_seed(SEED)
 np.random.seed(SEED)
 random.seed(SEED)
@@ -53,23 +56,63 @@ def random_sparse_indices2(shape, sparsity, seed=None):
 
     return tf.constant(sorted_indices, dtype=tf.int64), nnz
 
-# shape generico row major
-def random_sparse_indices3(shape, sparsity, seed=None):
-    total = np.prod(shape)
-    nnz = int((1.0 - sparsity) * total)  # Number of non-zero elements
 
-    rng = np.random.default_rng(seed)
-    chosen = rng.choice(total, size=nnz, replace=False)
 
-    # Convert flat indices to multi-dimensional indices
-    unraveled = np.stack(np.unravel_index(chosen, shape), axis=-1)  # shape: (nnz, len(shape))
 
-    # Convert multi-dimensional indices back to flat indices in row-major order for sorting
-    flat_sorted_order = np.ravel_multi_index(unraveled.T, shape)
-    sorted_indices = unraveled[np.argsort(flat_sorted_order)]
+def create_tensor_row_major_old(K, Cin, Cout, sparsity=0):
+    # Total number of elements
+    total_elements = K * K * Cin * Cout
 
-    return tf.constant(sorted_indices, dtype=tf.int64), nnz
+    # Number of non-zero elements
+    nnz = int(total_elements * (1 - sparsity))
 
+    # Create a flat tensor with sequential values followed by zeros
+    flat_values = tf.concat([
+        tf.range(nnz, dtype=tf.float32),  # Non-zero values
+        tf.zeros(total_elements - nnz, dtype=tf.float32)  # Zeros
+    ], axis=0)
+
+    # Shuffle the flat tensor to randomize positions
+    shuffled_indices = tf.random.shuffle(tf.range(total_elements))
+    flat_values = tf.gather(flat_values, shuffled_indices)
+
+    # Reshape into [K, K, Cin, Cout] (row-major order)
+    tensor = tf.reshape(flat_values, [K, K, Cin, Cout])
+
+    #zeros = tf.equal(tensor, 0)
+    #print( tf.reduce_sum(tf.cast(zeros, tf.int64)))
+
+    return tensor
+
+def create_tensor_row_major(K, Cin, Cout, sparsity=0):
+    # Total number of elements
+    total_elements = K * K * Cin * Cout
+
+    # Number of non-zero elements
+    nnz = int(total_elements * (1 - sparsity))
+
+    # Create a flat tensor with sequential values (starting from 1) followed by zeros
+    flat_values = tf.concat([
+        tf.range(1, nnz + 1, dtype=tf.float32),  # Non-zero values (1, 2, ..., nnz)
+        tf.zeros(total_elements - nnz, dtype=tf.float32)  # Zeros
+    ], axis=0)
+
+    SEED = 2
+    tf.random.set_seed(SEED)
+    np.random.seed(SEED)
+    random.seed(SEED)
+
+    shuffled_indices = tf.random.shuffle(tf.range(total_elements))
+    flat_values = tf.gather(flat_values, shuffled_indices)
+
+    # Reshape into [K, K, Cin, Cout] (row-major order)
+    tensor = tf.reshape(flat_values, [K, K, Cin, Cout])
+
+    '''total_elements = tf.size(tensor, out_type=tf.int64)
+    non_zeros = tf.math.count_nonzero(tensor)
+    xxx =  total_elements - non_zeros'''
+
+    return tensor
 
 
 # è come FFNsSparse, tranne che si aspetta X (batch_size, input_dim)
@@ -218,47 +261,46 @@ class DenseFFN(tf.Module):
             if i < self.num_layers - 1:
                 out = tf.nn.relu(out)
         return out
+'''
+#inizializza con create_tensor_row_major -- ConvDense e ConvSparse2 devono dare lo stesso risultato
+
 class ConvDense(tf.Module):
     def __init__(self, num_classes=10):
         super().__init__(name=None)
 
+
         # ---- Convolutional Layer 1 ----
         in_chan1 = 1
         out_chan1 = 5
-        self.conv1_w = tf.Variable(
-            tf.random.normal([3, 3, in_chan1, out_chan1], stddev=0.1), name="conv1_w"
-        )
-        self.conv1_b = tf.Variable(tf.zeros([out_chan1]), name="conv1_b")
+        #self.conv1_w = tf.Variable(tf.random.normal([3, 3, in_chan1, out_chan1], stddev=0.1), name="conv1_w")
+        self.conv1_w =  tf.Variable(create_tensor_row_major(3,in_chan1,out_chan1), name="conv1_w")
+        self.conv1_b =  tf.Variable(tf.zeros([out_chan1]), name="conv1_b")
 
 
 
         # ---- Convolutional Layer 2 ----
         in_chan2 = out_chan1
         out_chan2 = 8
-        self.conv2_w = tf.Variable(
-            tf.random.normal([3, 3, in_chan2, out_chan2], stddev=0.1), name="conv2_w"
-        )
+        #self.conv2_w = tf.Variable( tf.random.normal([3, 3, in_chan2, out_chan2], stddev=0.1), name="conv2_w")
+        self.conv2_w = tf.Variable(create_tensor_row_major(3,in_chan2,out_chan2), name="conv2_w")
         self.conv2_b = tf.Variable(tf.zeros([out_chan2]), name="conv2_b")
 
         # ---- Fully Connected Layers ----
-        self.fc1_w = tf.Variable(
-            tf.random.normal([7*7*out_chan2, 128], stddev=0.1), name="fc1_w"
-        )
+        #self.fc1_w = tf.Variable(tf.random.normal([7*7*out_chan2, 128], stddev=0.1), name="fc1_w")
+        self.fc1_w = tf.Variable(funzioni.SparseTensor([7*7*out_chan2, 128],0,name="fc1_wmio").to_tf_dense(),name="fc1_wmio")
+        #self.fc1_w = tf.Variable(tf.ones(shape=(7 * 7 * 8, 128)),name = "fc1_w")
         self.fc1_b = tf.Variable(tf.zeros([128]), name="fc1_b")
 
-        self.fc2_w = tf.Variable(
-            tf.random.normal([128, num_classes], stddev=0.1), name="fc2_w"
-        )
+        #self.fc2_w = tf.Variable(tf.random.normal([128, num_classes], stddev=0.1), name="fc2_w")
+        self.fc2_w = tf.Variable(funzioni.SparseTensor([128, num_classes],0,name="fc2_wmio").to_tf_dense(),name="fc2_wmio")
+        #self.fc2_w = tf.Variable(tf.ones(shape=(128, num_classes)),name = "fc2_w")
         self.fc2_b = tf.Variable(tf.zeros([num_classes]), name="fc2_b")
 
     def __call__(self, x):
         # x: [batch_size, 28, 28, 1]
 
         # ---- Conv Layer 1 + ReLU + MaxPool ----
-        print(mem_usage())
         x = tf.nn.conv2d(x, self.conv1_w, strides=1, padding='SAME')
-        print(mem_usage())
-        print()
 
         x = tf.nn.bias_add(x, self.conv1_b)
         x = tf.nn.relu(x)
@@ -273,58 +315,83 @@ class ConvDense(tf.Module):
         # ---- Flatten ----
         x = tf.reshape(x, [x.shape[0], -1])  # [batch, 7*7*64]
 
+
         # ---- Dense Layer + ReLU ----
         x = tf.matmul(x, self.fc1_w) + self.fc1_b
+
         x = tf.nn.relu(x)
+
 
         # ---- Output Layer (logits) ----
         logits = tf.matmul(x, self.fc2_w) + self.fc2_b
-
+        #tf.io.write_file('de.bytes', tf.io.serialize_tensor(logits))
+        #exit()
         return logits
-
-
 class ConvSparse2(tf.Module):
     def __init__(self, num_classes=10):
         super().__init__(name=None)
-        sparsity = 0.9
-
+        #sparsity = 0.7
         # ---- Convolutional Layer 1 ----
-        #self.conv1_w = tf.Variable( tf.random.normal([3, 3, 1, 5], stddev=0.1), name="conv1_w" )
+
         self.conv1_shape = [3, 3, 1, 5]
-        self.conv1_indices, conv1_nnz = random_sparse_indices3(self.conv1_shape,sparsity)
-        self.conv1_values = tf.Variable(tf.random.normal([conv1_nnz]), name="conv1_values")
+        #self.conv1_indices, conv1_nnz = funzioni.SparseTensor.random_sparse_indices3(self.conv1_shape,sparsity)
+        #self.conv1_values = tf.Variable(tf.random.normal([conv1_nnz]), name="conv1_values")
+        #self.conv1_dense = tf.sparse.to_dense(tf.sparse.SparseTensor(self.conv1_indices, self.conv1_values, self.conv1_shape))
+        #tt = create_tensor_row_major(3,1,5)
+        #tt_sp = tf.sparse.from_dense(tt)
+        #self.conv1_values = tf.Variable(tt_sp.values, name="conv1_values")
+        #self.conv1_indices = tt_sp.indices
+        #tt = tf.reshape(tt,-1)
+        #self.conv1_values = tf.Variable(tt, name="conv1_values")
+        self.conv1_w =tf.recompute_grad( funzioni.SparseTensor(create_tensor_row_major(3,1,5)))
+        #self.conv1_w = funzioni.SparseTensor(self.conv1_shape,sparsity,name = "conv1_w")
+        #xxx = self.conv1_w.to_tf_dense()
+        #print(tf.reduce_max(tf.abs(tt - xxx)))
         self.conv1_b = tf.Variable(tf.zeros([5]), name="conv1_b")
 
         # ---- Convolutional Layer 2 ----
         #self.conv2_w = tf.Variable(tf.random.normal([3, 3, 5, 8], stddev=0.1), name="conv2_w")
         self.conv2_shape = [3, 3, 5, 8]
-        self.conv2_indices, conv2_nnz = random_sparse_indices3(self.conv2_shape,sparsity)
-        self.conv2_values = tf.Variable(tf.random.normal([conv2_nnz]), name="conv2_values")
+        #self.conv2_indices, conv2_nnz = funzioni.SparseTensor.random_sparse_indices3(self.conv2_shape,sparsity)
+        #self.conv2_values = tf.Variable(tf.random.normal([conv2_nnz]), name="conv2_values")
+        #tt = create_tensor_row_major(3, 5, 8)
+        #tt_sp = tf.sparse.from_dense(tt)
+        #self.conv2_values = tf.Variable(tt_sp.values, name="conv2_values")
+        #self.conv2_indices = tt_sp.indices
+        self.conv2_w = funzioni.SparseTensor(create_tensor_row_major(3, 5, 8))
+        #self.conv2_w = funzioni.SparseTensor(self.conv2_shape,sparsity, name = "conv2_w")
+        #xxx = self.conv2_w.to_tf_dense()
+        # print(tf.reduce_max(tf.abs(tt - xxx)))
+        #tt = tf.reshape(tt, -1)
+        #self.conv2_values = tf.Variable(tt, name="conv2_values")
         self.conv2_b = tf.Variable(tf.zeros([8]), name="conv2_b")
 
+
         # ---- Fully Connected Layers ----
-        self.fc1_w = tf.Variable(tf.random.normal([7 * 7 * 8, 128], stddev=0.1), name="fc1_w")
+        #self.fc1_w = tf.Variable(tf.random.normal([7 * 7 * 8, 128], stddev=0.1), name="fc1_w")
+        self.fc1_w = funzioni.SparseTensor([7 * 7 * 8, 128],0 ,name="fc1_wmio")
+        #self.fc1_w = funzioni.SparseTensor(tf.ones(shape=[7 * 7 * 8, 128]),name ="fc1_wmio")
         self.fc1_b = tf.Variable(tf.zeros([128]), name="fc1_b")
 
-        self.fc2_w = tf.Variable(tf.random.normal([128, num_classes], stddev=0.1), name="fc2_w")
+
+        #self.fc2_w = tf.Variable(tf.random.normal([128, num_classes], stddev=0.1), name="fc2_w")
+        #self.fc2_w = funzioni.SparseTensor(tf.ones(shape=[128, num_classes]),name ="fc2_wmio")
+        self.fc2_w = funzioni.SparseTensor([128, num_classes],0,name="fc2_wmio")
         self.fc2_b = tf.Variable(tf.zeros([num_classes]), name="fc2_b")
 
     def __call__(self, x):
-        conv_fun = conv.conv_sparse_fast8_padding_v2_stride
         # x: [batch_size, 28, 28, 1]
 
         # ---- Conv Layer 1 + ReLU + MaxPool ----
-        # x = tf.nn.conv2d(x, self.conv1_w, strides=1, padding='SAME')
-        #conv1_sparse_filter = tf.sparse.from_dense(self.conv1_w)
-        #print(mem_usage())
-        conv1_sparse_filter = tf.SparseTensor(self.conv1_indices, self.conv1_values, self.conv1_shape)
-        x = conv_fun(x, conv1_sparse_filter, padding="SAME", stride=1)
+        #conv1_sparse_filter = tf.SparseTensor(self.conv1_indices, self.conv1_values, self.conv1_shape)
         #conv1_sparse_dense_filter = tf.sparse.to_dense(conv1_sparse_filter)
-        #x = tf.nn.conv2d(x,conv1_sparse_dense_filter, strides=1, padding='SAME')
 
-        #x = tf.random.normal([32, 28, 28, 5])
-        #print(mem_usage())
-        print()
+        #print(tf.reduce_max(tf.abs(conv1_sparse_dense_filter - self.conv1_dense)))
+
+        #x= tf.nn.conv2d(x,conv1_sparse_dense_filter, strides=1, padding='SAME')
+        x = conv.sparse_to_dense_conv2d(x,self.conv1_w, stride=1, padding='SAME')
+
+
 
         x = tf.nn.bias_add(x, self.conv1_b)
         x = tf.nn.relu(x)
@@ -334,26 +401,263 @@ class ConvSparse2(tf.Module):
         # ---- Conv Layer 2 + ReLU + MaxPool ----
         # x = tf.nn.conv2d(x, self.conv2_w, strides=1, padding='SAME')
         #conv2_sparse_filter = tf.sparse.from_dense(self.conv2_w)
-        conv2_sparse_filter = tf.SparseTensor(self.conv2_indices, self.conv2_values, self.conv2_shape)
-        x = conv_fun(x, conv2_sparse_filter, padding="SAME", stride=1)
+        #conv2_sparse_filter = tf.SparseTensor(self.conv2_indices, self.conv2_values, self.conv2_shape)
+        #conv2_sparse_dense_filter = tf.sparse.to_dense(conv2_sparse_filter)
+        #x = tf.nn.conv2d(x,conv2_sparse_dense_filter, strides=1, padding='SAME')
+        x = conv.sparse_to_dense_conv2d(x,self.conv2_w, stride=1, padding='SAME')
 
         x = tf.nn.bias_add(x, self.conv2_b)
         x = tf.nn.relu(x)
         x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')  # [batch, 7, 7, 64]
 
 
+        # ---- Flatten ----
+        x = tf.reshape(x, [x.shape[0], -1])  # [batch, 7*7*64]
+
+
+
+        # ---- Dense Layer + ReLU ----
+        #x = tf.matmul(x, self.fc1_w) + self.fc1_b
+        x = conv.matmul(x, self.fc1_w) + self.fc1_b
+        x = tf.nn.relu(x)
+
+        # ---- Output Layer (logits) ----
+        logits = conv.matmul(x, self.fc2_w) + self.fc2_b
+        #tf.io.write_file('sp.bytes', tf.io.serialize_tensor(logits))
+        #exit()
+
+        return logits
+'''
+class ConvDense(tf.Module):
+    def __init__(self, num_classes=10):
+        super().__init__(name=None)
+
+
+        # ---- Convolutional Layer 1 ----
+        in_chan1 = 1
+        out_chan1 = 5
+        self.conv1_w = tf.Variable(tf.random.normal([3, 3, in_chan1, out_chan1], stddev=0.1), name="conv1_w")
+        #self.conv1_w =  tf.Variable(create_tensor_row_major(3,in_chan1,out_chan1), name="conv1_w")
+        self.conv1_b =  tf.Variable(tf.zeros([out_chan1]), name="conv1_b")
+
+
+
+        # ---- Convolutional Layer 2 ----
+        in_chan2 = out_chan1
+        out_chan2 = 8
+        self.conv2_w = tf.Variable( tf.random.normal([3, 3, in_chan2, out_chan2], stddev=0.1), name="conv2_w")
+        #self.conv2_w = tf.Variable(create_tensor_row_major(3,in_chan2,out_chan2), name="conv2_w")
+        self.conv2_b = tf.Variable(tf.zeros([out_chan2]), name="conv2_b")
+
+        # ---- Fully Connected Layers ----
+        self.fc1_w = tf.Variable(tf.random.normal([7*7*out_chan2, 128], stddev=0.1), name="fc1_w")
+        #self.fc1_w = tf.Variable(funzioni.SparseTensor([7*7*out_chan2, 128],0,name="fc1_wmio").to_tf_dense(),name="fc1_wmio")
+        #self.fc1_w = tf.Variable(tf.ones(shape=(7 * 7 * 8, 128)),name = "fc1_w")
+        self.fc1_b = tf.Variable(tf.zeros([128]), name="fc1_b")
+
+        self.fc2_w = tf.Variable(tf.random.normal([128, num_classes], stddev=0.1), name="fc2_w")
+        #self.fc2_w = tf.Variable(funzioni.SparseTensor([128, num_classes],0,name="fc2_wmio").to_tf_dense(),name="fc2_wmio")
+        #self.fc2_w = tf.Variable(tf.ones(shape=(128, num_classes)),name = "fc2_w")
+        self.fc2_b = tf.Variable(tf.zeros([num_classes]), name="fc2_b")
+
+    def __call__(self, x):
+        # x: [batch_size, 28, 28, 1]
+
+        # ---- Conv Layer 1 + ReLU + MaxPool ----
+        x = tf.nn.conv2d(x, self.conv1_w, strides=1, padding='SAME')
+        x = tf.nn.bias_add(x, self.conv1_b)
+        x = tf.nn.relu(x)
+        x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')  # [batch, 14, 14, 32]
+
+        # ---- Conv Layer 2 + ReLU + MaxPool ----
+        x = tf.nn.conv2d(x, self.conv2_w, strides=1, padding='SAME')
+        x = tf.nn.bias_add(x, self.conv2_b)
+        x = tf.nn.relu(x)
+        x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')  # [batch, 7, 7, 64]
 
         # ---- Flatten ----
         x = tf.reshape(x, [x.shape[0], -1])  # [batch, 7*7*64]
 
+
         # ---- Dense Layer + ReLU ----
-        x = tf.matmul(x, self.fc1_w) + self.fc1_b
+        x =  tf.matmul(x, self.fc1_w) + self.fc1_b
+
         x = tf.nn.relu(x)
+
 
         # ---- Output Layer (logits) ----
         logits = tf.matmul(x, self.fc2_w) + self.fc2_b
+        #tf.io.write_file('de.bytes', tf.io.serialize_tensor(logits))
+        #exit()
+        return logits
+
+# usa funzioni.SparseTensor
+class ConvSparse(tf.Module):
+    def __init__(self, sparsity ,num_classes=10):
+        super().__init__(name=None)
+        # ---- Convolutional Layer 1 ----
+
+
+        self.conv1_w = funzioni.SparseTensor([3, 3, 1, 5],sparsity)
+        self.conv1_b = tf.Variable(tf.zeros([5]), name="conv1_b")
+
+
+        self.conv2_w = funzioni.SparseTensor([3, 3, 5, 8], sparsity)
+        self.conv2_b = tf.Variable(tf.zeros([8]), name="conv2_b")
+
+
+
+        self.fc1_w = funzioni.SparseTensor([7 * 7 * 8, 128],sparsity,name="fc1_wmio")
+        self.fc1_b = tf.Variable(tf.zeros([128]), name="fc1_b")
+
+        self.fc2_w = funzioni.SparseTensor([128, num_classes],sparsity,name="fc2_wmio")
+        self.fc2_b = tf.Variable(tf.zeros([num_classes]), name="fc2_b")
+
+    def __call__(self, x):
+        x = conv.sparse_to_dense_conv2d(x,self.conv1_w, stride=1, padding='SAME')
+
+        x = tf.nn.bias_add(x, self.conv1_b)
+        x = tf.nn.relu(x)
+        x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')
+
+        x = conv.sparse_to_dense_conv2d(x,self.conv2_w, stride=1, padding='SAME')
+        x = tf.nn.bias_add(x, self.conv2_b)
+        x = tf.nn.relu(x)
+        x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')  # [batch, 7, 7, 64]
+
+
+        x = tf.reshape(x, [x.shape[0], -1])  # [batch, 7*7*64]
+
+        x = conv.matmul(x, self.fc1_w) + self.fc1_b
+        x = tf.nn.relu(x)
+
+        logits = conv.matmul(x, self.fc2_w) + self.fc2_b
+
 
         return logits
+
+class ConvSparse_check(tf.Module):
+    def __init__(self, sparsity, num_classes=10):
+        super().__init__(name=None)
+
+        self.conv1_w = funzioni.SparseTensor([3, 3, 1, 5],sparsity)
+        self.conv1_b = tf.Variable(tf.zeros([5]), name="conv1_b")
+
+        self.conv2_w = funzioni.SparseTensor([3, 3, 5, 8],sparsity)
+        self.conv2_b = tf.Variable(tf.zeros([8]), name="conv2_b")
+
+        self.fc1_w = funzioni.SparseTensor([7 * 7 * 8, 128], sparsity, name="fc1_wmio")
+        self.fc1_b = tf.Variable(tf.zeros([128]), name="fc1_b")
+
+        self.fc2_w = funzioni.SparseTensor([128, num_classes], sparsity, name="fc2_wmio")
+        self.fc2_b = tf.Variable(tf.zeros([num_classes]), name="fc2_b")
+
+    def conv_block_1(self, x):
+        #@tf.recompute_grad
+        def block(x):
+            x = conv.sparse_to_dense_conv2d(x, self.conv1_w, stride=1, padding='SAME')
+            x = tf.nn.bias_add(x, self.conv1_b)
+            x = tf.nn.relu(x)
+            x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')
+            return x
+        return block(x)
+
+    def conv_block_2(self, x):
+        #@tf.recompute_grad
+        def block(x):
+            x =  conv.sparse_to_dense_conv2d(x, self.conv2_w, stride=1, padding='SAME')
+            x = tf.nn.bias_add(x, self.conv2_b)
+            x = tf.nn.relu(x)
+            x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')
+            return x
+        return block(x)
+
+    def __call__(self, x):
+        x = self.conv_block_1(x)
+        x = self.conv_block_2(x)
+
+        x = tf.reshape(x, [tf.shape(x)[0], -1])
+        x = conv.matmul(x, self.fc1_w) + self.fc1_b
+        x = tf.nn.relu(x)
+
+        logits = conv.matmul(x, self.fc2_w) + self.fc2_b
+        return logits
+
+# usa indices , values, e shape senza dichiarare funzioni.SparseTensor
+class ConvSparse_explicit(tf.Module):
+    def __init__(self, sparsity ,num_classes=10):
+        super().__init__(name=None)
+        # ---- Convolutional Layer 1 ----
+
+
+        #self.conv1_w = funzioni.SparseTensor([3, 3, 1, 5],sparsity)
+        self.conv1_shape = [3, 3, 1, 5]
+        self.conv1_indices,nnz = funzioni.SparseTensor.random_sparse_indices3(self.conv1_shape,sparsity)
+        self.conv1_values = tf.Variable(tf.random.normal([nnz]), name="conv1_values")
+        self.conv1_b = tf.Variable(tf.zeros([5]), name="conv1_b")
+
+
+        #self.conv2_w = funzioni.SparseTensor([3, 3, 5, 8], sparsity)
+        self.conv2_shape = [3, 3, 5, 8]
+        self.conv2_indices,nnz = funzioni.SparseTensor.random_sparse_indices3(self.conv2_shape,sparsity)
+        self.conv2_values = tf.Variable(tf.random.normal([nnz]), name="conv2_values")
+        self.conv2_b = tf.Variable(tf.zeros([8]), name="conv2_b")
+
+
+        #self.fc1_w = funzioni.SparseTensor([7 * 7 * 8, 128],sparsity,name="fc1_wmio")
+        self.fc1_shape = [7 * 7 * 8, 128]
+        self.fc1_indices,nnz = funzioni.SparseTensor.random_sparse_indices3(self.fc1_shape,sparsity)
+        self.fc1_values = tf.Variable(tf.random.normal([nnz]), name="fc1_values")
+        self.fc1_b = tf.Variable(tf.zeros([128]), name="fc1_b")
+
+        #self.fc2_w = funzioni.SparseTensor([128, num_classes],sparsity,name="fc2_wmio")
+        self.fc2_shape = [ 128, num_classes]
+        self.fc2_indices,nnz = funzioni.SparseTensor.random_sparse_indices3(self.fc2_shape,sparsity)
+        self.fc2_values = tf.Variable(tf.random.normal([nnz]), name="fc2_values")
+        self.fc2_b = tf.Variable(tf.zeros([num_classes]), name="fc2_b")
+
+    def __call__(self, x):
+        #x = conv.sparse_to_dense_conv2d(x,self.conv1_w, stride=1, padding='SAME')
+        conv1_sparse = tf.sparse.SparseTensor(self.conv1_indices, self.conv1_values, self.conv1_shape)
+        conv1_dense = tf.sparse.to_dense(conv1_sparse)
+        x = tf.nn.conv2d(x,conv1_dense,strides=1,padding='SAME')
+
+        x = tf.nn.bias_add(x, self.conv1_b)
+        x = tf.nn.relu(x)
+        x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')
+#----------------------------------------------------------------------------------------------
+        #x = conv.sparse_to_dense_conv2d(x,self.conv2_w, stride=1, padding='SAME')
+
+        conv2_sparse = tf.sparse.SparseTensor(self.conv2_indices, self.conv2_values, self.conv2_shape)
+        conv2_dense = tf.sparse.to_dense(conv2_sparse)
+        x = tf.nn.conv2d(x,conv2_dense,strides=1,padding='SAME')
+
+
+        x = tf.nn.bias_add(x, self.conv2_b)
+        x = tf.nn.relu(x)
+        x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')  # [batch, 7, 7, 64]
+
+
+        x = tf.reshape(x, [x.shape[0], -1])  # [batch, 7*7*64]
+
+        #x = conv.matmul(x, self.fc1_w) + self.fc1_b
+
+        fc1_sparse = tf.sparse.SparseTensor(self.fc1_indices, self.fc1_values, self.fc1_shape)
+        fc1_dense = tf.sparse.to_dense(fc1_sparse)
+        x = tf.matmul(x,fc1_dense) + self.fc1_b
+
+        x = tf.nn.relu(x)
+
+        #logits = conv.matmul(x, self.fc2_w) + self.fc2_b
+
+        fc2_sparse = tf.sparse.SparseTensor(self.fc2_indices, self.fc2_values, self.fc2_shape)
+        fc2_dense = tf.sparse.to_dense(fc2_sparse)
+        logits = tf.matmul(x,fc2_dense) + self.fc2_b
+
+
+
+        return logits
+
 
 
 #TODO: serve fare tf.constant quando si creano nuovi indici?
@@ -567,9 +871,9 @@ def train(model, X, y, epochs, batch_size,lr ,prune_and_regrow_step ):
 
                 acc = test(model,X,y)
                 #acc = test_transpose(model,X,y)
-                print(f"it: {it}, acc: {acc:.3f}")
-                #print(f"Step {step:03d} | Loss: {loss:.4f}")
-                #print(mem_usage())
+                #print(f"it: {it}, acc: {acc:.3f}")
+                print(f"Step {step:03d} | Loss: {loss}")
+                print(mem_usage())
                 #print(time.perf_counter() - start_time, "seconds")
 
                 #exit(-1)
@@ -625,25 +929,29 @@ def test_transpose(model, X, y):
 def main():
     num_features = 784
     num_classes = 10
-    hidden_dim = 256
-    num_hidden_layers = 5
-    (X_train,y_train),(X_test,y_test)= load_mnist_data(flatten=False)
+    hidden_dim = 1000
+    num_hidden_layers = 50
+    (X_train,y_train),(X_test,y_test)= load_mnist_data(flatten=True)
 
     #X_train, y_train = generate_data(samples = 100, features=num_features, classes=num_classes)
-
-    '''model = FFNsSparse(input_dim=num_features,
-                       hidden_dim=hidden_dim,
-                       output_dim=num_classes,
-                       num_hidden_layers=num_hidden_layers,
-                       sparsity=0.9,
-                       option='B1')'''
-
+    # (1037.427734375, 3289.36328125, 2622.01171875, 3471.2890625) sparse ffn B1/B2
+    # (2401.93798828125, 5394.37109375, 3722.74609375, 5752.55859375) sparse ffn A1
+    # (1481.763671875, 3174.77734375, 2290.27734375, 3187.3359375) dense ffn
+    model = FFNsSparse(input_dim=num_features,hidden_dim=hidden_dim,output_dim=num_classes,num_hidden_layers=num_hidden_layers,sparsity=0.9,option='A1')
     #model = DenseFFN(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes, num_hidden_layers=num_hidden_layers)
+    #model= ConvSparse_check(num_classes= 10)
+    #model= ConvDense_original(num_classes= 10)
+    #dmodel= ConvSparse_explicit(sparsity=0,num_classes= 10)
 
-    #model = ConvDense(num_classes= 10)
-    model = ConvSparse2(num_classes= 10)
-    #t = model.trainable_variables
-    train(model, X_train, y_train,epochs=500, batch_size=32,lr= 0.01,
+    '''sp = tf.io.parse_tensor(tf.io.read_file('sp.bytes'), out_type=tf.float32)
+    de = tf.io.parse_tensor(tf.io.read_file('de.bytes'), out_type=tf.float32)
+    print(tf.reduce_max(tf.abs(sp - de)))
+    exit()'''
+
+    t = model.trainable_variables
+    trainable_count = sum(tf.size(v).numpy() for v in model.trainable_variables)
+    print("Total number of trainable scalars:", trainable_count)
+    train(model, X_train, y_train,epochs=500, batch_size=2048,lr= 0.01,
           prune_and_regrow_step=3000)
 
 

@@ -1,14 +1,11 @@
 import os
 import sys
-from guppy import hpy
 import time
 import numpy as np
 import matplotlib.pyplot as plt
 import psutil
 import tensorflow as tf
-from cnn_utils import *
-from memory_profiler import profile
-from memory_profiler import memory_usage
+
 
 def mem_usage():
     mem_info = psutil.Process().memory_full_info()  # Retrieve memory full info
@@ -84,8 +81,8 @@ def train(model, X, Y, epochs=10, batch_size=32):
 def main():
     X, Y = generate_data(50, features=100)
 
-    model = DeepDenseModel()
-    #model = DeepDenseCheckpointed()
+    #model = DeepDenseModel()
+    model = DeepDenseCheckpointed()
     train(model, X, Y)
 
 

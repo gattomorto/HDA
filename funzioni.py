@@ -1,6 +1,8 @@
 import tensorflow as tf
 import numpy as np
 import random
+import utils
+import gc
 
 
 SEED = 0
@@ -94,14 +96,14 @@ def test2(model, X, y, batch_size=32):
     accuracy = num_correct / num_samples
     return accuracy
 
-
-
 def train(model, X, y, epochs, batch_size, lr, prune_and_regrow_step):
-
+    SEED = 0
+    tf.random.set_seed(SEED)
+    np.random.seed(SEED)
+    random.seed(SEED)
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
     loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
     dataset = tf.data.Dataset.from_tensor_slices((X, y)).shuffle(1024).batch(batch_size)
-
     it = 0
     for epoch in range(epochs):
         print(f"\nEpoch {epoch + 1}")
@@ -109,15 +111,82 @@ def train(model, X, y, epochs, batch_size, lr, prune_and_regrow_step):
             it += 1
             with tf.GradientTape() as tape:
                 logits = model(x_batch, training=True)
-
+                #print("dopo logits = model(x_batch, training=True)")
+                #print(utils.mem_usage())
                 loss = loss_fn(y_batch, logits)
-                print(f"loss: {loss.numpy():.3f}")
+                #print("dopo loss = loss_fn(y_batch, logits)")
+                print(utils.mem_usage())
+                print(f"loss: {loss.numpy()}")
 
             grads = tape.gradient(loss, model.trainable_variables)
+            #print("dopo grads = tape.gradient(loss, model.trainable_variables)")
+            #print(utils.mem_usage())
+
+
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
+            #print("dopo optimizer.apply_gradients(zip(grads, model.trainable_variables))")
+            #print(utils.mem_usage())
 
             if it % 1 == 0:
                 pass
                 #acc = test2(model, X, y)
                 #print(f"it: {it}, acc: {acc:.3f}")
+                #print(utils.mem_usage())
+
+class SparseTensor(tf.Module):
+    # shape generico row major
+    #TODO: cambia in sparse_indices_init & metti in init & rng & usare solo operazioni tf
+    #TODO: capire se devono essere ordinati
+    @staticmethod
+    def random_sparse_indices3(shape, sparsity):
+        SEED = 2
+        tf.random.set_seed(SEED)
+        np.random.seed(SEED)
+        random.seed(SEED)
+
+        total = np.prod(shape)
+        nnz = int((1.0 - sparsity) * total)  # Number of non-zero elements
+
+        rng = np.random.default_rng(0)
+        chosen = rng.choice(total, size=nnz, replace=False)
+
+        # Convert flat indices to multi-dimensional indices
+        unraveled = np.stack(np.unravel_index(chosen, shape), axis=-1)  # shape: (nnz, len(shape))
+
+        # Convert multi-dimensional indices back to flat indices in row-major order for sorting
+        flat_sorted_order = np.ravel_multi_index(unraveled.T, shape)
+        sorted_indices = unraveled[np.argsort(flat_sorted_order)]
+
+        return tf.constant(sorted_indices, dtype=tf.int64), nnz
+
+
+    def __init__(self, *args,  name=None):
+        SEED = 2
+        tf.random.set_seed(SEED)
+        np.random.seed(SEED)
+        random.seed(SEED)
+        super().__init__(name=name)
+
+        if len(args) == 2 and isinstance(args[0], list) and isinstance(args[1], (float,int)):
+            shape, sparsity = args
+            self.sparsity = sparsity
+            self.shape = shape
+            self.indices, nnz = self.random_sparse_indices3(shape, sparsity)
+            self.values = tf.Variable(tf.random.normal([nnz]), name=name)
+        elif len(args) == 1 and isinstance(args[0], tf.Tensor):
+            dense_tensor = args[0]
+            tf_sparse = tf.sparse.from_dense(dense_tensor)
+            self.shape = tf_sparse.dense_shape
+            self.indices = tf_sparse.indices
+            self.values = tf.Variable(tf_sparse.values, name=name)
+        else:
+            raise TypeError("Invalid arguments for SparseTensor initialization. "
+                            "Expected either (shape: tuple, sparsity: float) or (dense_tensor: tf.Tensor).")
+
+    def to_tf_sparse(self):
+        return tf.sparse.SparseTensor(self.indices, self.values, self.shape)
+
+    def to_tf_dense(self):
+        return tf.sparse.to_dense(self.to_tf_sparse())
+
 

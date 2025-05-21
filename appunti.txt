@@ -220,3 +220,6 @@ fare anche l'output sparso?
 
 tf.raw_ops.SparseTensorDenseMatMul
 
+
+controlla se tutte le funzioni su cui si poteva fare checkoiint sono state fatte (anhe fully connected in fondo)/ batch norm
+

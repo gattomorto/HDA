@@ -2,6 +2,10 @@ import numpy as np
 import tensorflow as tf
 from functools import reduce
 import math
+import funzioni
+import v4
+from tensorflow.python.ops.gen_sparse_ops import sparse_reorder, sparse_tensor_dense_mat_mul, sparse_to_dense
+
 
 # trasforma il kernel in matrice e fa sparse matmul
 # consuma tantissima memoria perchè quasi tutti gli elementi sono replicati
@@ -117,7 +121,7 @@ def conv_sparse_fast8_padding_v2_stride(X, Q_sp, padding="VALID", stride=1):
 ###########################################################################
 
 # vari tentativi di fare conv diretta solo sugli elementi != 0
-# dal 5 al 9 sono tutte veloci simile
+# piu lento rispetto a conv_sparse_fast8_padding_v2_stride generalmente
 def direct_sparse_conv2d(input_tensor, sparse_filter, stride=1, padding='SAME'):
     """
     Performs sparse 2D convolution without densifying the kernel.
@@ -670,6 +674,290 @@ def direct_sparse_conv2d_9(X, Q_sp, stride=1, padding='SAME'):
         Y_flat = tf.sparse.sparse_dense_matmul(patches_flat, weight_matrix)
         Y = tf.reshape(Y_flat, [N, H_out, W_out, C_out])
         return Y
+
+#############################################################################
+
+
+# versioni di con in cui X diventa una matrice e filters è vettore
+def classic_conv2d(input, filters_sparse, stride=1, padding='SAME'):
+    def get_padding(padding, input_size, kernel_size, stride):
+        input_size = tf.cast(input_size, tf.float32)
+        kernel_size = tf.cast(kernel_size, tf.float32)
+        stride = tf.cast(stride, tf.float32)
+
+        if padding == 'SAME':
+            out_size = tf.math.ceil(input_size / stride)
+            pad_needed = tf.cast(tf.maximum((out_size - 1) * stride + kernel_size - input_size, 0), tf.int32)
+            pad_before = pad_needed // 2
+            pad_after = pad_needed - pad_before
+            return pad_before, pad_after
+        elif padding == 'VALID':
+            return tf.constant(0, dtype=tf.int32), tf.constant(0, dtype=tf.int32)
+        else:
+            raise ValueError("padding must be 'SAME' or 'VALID'")
+
+    input_shape = tf.shape(input)
+    N, H, W, C = input_shape[0], input_shape[1], input_shape[2], input_shape[3]
+    K = tf.cast(filters_sparse.dense_shape[0], tf.int32)
+    F = tf.cast(filters_sparse.dense_shape[3], tf.int32)
+
+    pad_h1, pad_h2 = get_padding(padding, H, K, stride)
+    pad_w1, pad_w2 = get_padding(padding, W, K, stride)
+
+    paddings = tf.stack([
+        [0, 0],
+        [pad_h1, pad_h2],
+        [pad_w1, pad_w2],
+        [0, 0]
+    ])
+    input_padded = tf.pad(input, paddings)
+
+    # Extract patches
+    patches = tf.image.extract_patches(
+        images=input_padded,
+        sizes=[1, K, K, 1],
+        strides=[1, stride, stride, 1],
+        rates=[1, 1, 1, 1],
+        padding='VALID'
+    )  # shape: (N, H_out, W_out, K*K*C)
+
+    patches_shape = tf.shape(patches)
+    N_out, H_out, W_out = patches_shape[0], patches_shape[1], patches_shape[2]
+    patch_dim = tf.shape(patches)[-1]
+
+    patches_reshaped = tf.reshape(patches, [N_out, H_out * W_out, patch_dim])  # [N, HW, K*K*C]
+
+    # Convert sparse filters to shape [K*K*C, F]
+    filters_sparse_flat = tf.sparse.reshape(filters_sparse, [patch_dim, F])
+
+    # Manually do batch sparse matmul
+    outputs = []
+    for i in range(N_out):
+        patch_i = patches_reshaped[i]  # [HW, patch_dim]
+        out_i = tf.sparse.sparse_dense_matmul(patch_i, filters_sparse_flat)  # [HW, F]
+        outputs.append(out_i)
+
+    output = tf.stack(outputs, axis=0)  # [N, HW, F]
+    output = tf.reshape(output, [N_out, H_out, W_out, F])
+    return output
+# piu o meno uguale a v1
+def classic_conv2d_2(input, filters_sparse, stride=1, padding='SAME'):
+    def get_padding(padding, input_size, kernel_size, stride):
+        input_size = tf.cast(input_size, tf.float32)
+        kernel_size = tf.cast(kernel_size, tf.float32)
+        stride = tf.cast(stride, tf.float32)
+
+        if padding == 'SAME':
+            out_size = tf.math.ceil(input_size / stride)
+            pad_needed = tf.cast(tf.maximum((out_size - 1) * stride + kernel_size - input_size, 0), tf.int32)
+            pad_before = pad_needed // 2
+            pad_after = pad_needed - pad_before
+            return pad_before, pad_after
+        elif padding == 'VALID':
+            return tf.constant(0, dtype=tf.int32), tf.constant(0, dtype=tf.int32)
+        else:
+            raise ValueError("padding must be 'SAME' or 'VALID'")
+
+    input_shape = tf.shape(input)
+    N, H, W, C = input_shape[0], input_shape[1], input_shape[2], input_shape[3]
+    K = tf.cast(filters_sparse.dense_shape[0], tf.int32)
+    F = tf.cast(filters_sparse.dense_shape[3], tf.int32)
+
+    pad_h1, pad_h2 = get_padding(padding, H, K, stride)
+    pad_w1, pad_w2 = get_padding(padding, W, K, stride)
+
+    paddings = tf.stack([
+        [0, 0],
+        [pad_h1, pad_h2],
+        [pad_w1, pad_w2],
+        [0, 0]
+    ])
+    input_padded = tf.pad(input, paddings)
+
+    # Extract patches
+    patches = tf.image.extract_patches(
+        images=input_padded,
+        sizes=[1, K, K, 1],
+        strides=[1, stride, stride, 1],
+        rates=[1, 1, 1, 1],
+        padding='VALID'
+    )  # shape: (N, H_out, W_out, K*K*C)
+
+    patches_shape = tf.shape(patches)
+    N_out, H_out, W_out, patch_dim = patches_shape[0], patches_shape[1], patches_shape[2], patches_shape[3]
+    HW = H_out * W_out
+
+    # Reshape to [N * HW, patch_dim]
+    patches_reshaped = tf.reshape(patches, [N_out * HW, patch_dim])
+
+    # Sparse filter reshape [patch_dim, F]
+    filters_sparse_flat = tf.sparse.reshape(filters_sparse, [patch_dim, F])
+
+    # Sparse-dense matmul: [N * HW, F]
+    output_flat = tf.sparse.sparse_dense_matmul(patches_reshaped, filters_sparse_flat)
+
+    # Reshape back to [N, H_out, W_out, F]
+    output = tf.reshape(output_flat, [N_out, H_out, W_out, F])
+    return output
+def classic_conv2d_3(input, filters_sparse, stride=1, padding='SAME'):
+    input_shape = input.shape
+    K = filters_sparse.dense_shape[0]  # Kernel height = kernel width
+    F = filters_sparse.dense_shape[3]  # Number of output filters
+
+    # Precompute padding statically
+    def compute_padding(padding, input_dim, kernel_dim, stride_dim):
+        if padding == 'SAME':
+            out_dim = (input_dim + stride_dim - 1) // stride_dim
+            pad_total = max((out_dim - 1) * stride_dim + kernel_dim - input_dim, 0)
+            pad_before = pad_total // 2
+            pad_after = pad_total - pad_before
+            return pad_before, pad_after
+        elif padding == 'VALID':
+            return 0, 0
+        else:
+            raise ValueError("padding must be 'SAME' or 'VALID'")
+
+    pad_top, pad_bottom = compute_padding(padding, input_shape[1], K, stride)
+    pad_left, pad_right = compute_padding(padding, input_shape[2], K, stride)
+
+    # Pad input
+    input_padded = tf.pad(input, [[0, 0], [pad_top, pad_bottom], [pad_left, pad_right], [0, 0]])
+
+    # Extract patches
+    patches = tf.image.extract_patches(
+        images=input_padded,
+        sizes=[1, K, K, 1],
+        strides=[1, stride, stride, 1],
+        rates=[1, 1, 1, 1],
+        padding='VALID'  # Already handled manually
+    )
+
+    # Flatten patches to [N * H_out * W_out, K*K*C]
+    N, H_out, W_out, patch_dim = patches.shape
+    patches_flat = tf.reshape(patches, [-1, patch_dim])
+
+    # Reshape sparse filters [patch_dim, F]
+    filters_sparse_reshaped = tf.sparse.reshape(filters_sparse, [patch_dim, F])
+
+    # Multiply: [N * H_out * W_out, patch_dim] x [patch_dim, F] = [N * H_out * W_out, F]
+    output_flat = tf.sparse.sparse_dense_matmul(patches_flat, filters_sparse_reshaped)
+
+    # Reshape to [N, H_out, W_out, F]
+    output = tf.reshape(output_flat, [N, H_out, W_out, F])
+    return output
+def classic_conv2d_4(input, filters_sparse, stride=1, padding='SAME'):
+    """
+    Final working version with correct matrix dimensions
+    """
+    # Get shapes with consistent dtype (int32)
+    input_shape = tf.shape(input, out_type=tf.int32)
+    N = input_shape[0]  # Batch size
+    H = input_shape[1]  # Input height
+    W = input_shape[2]  # Input width
+    C = input_shape[3]  # Input channels
+
+    # Convert all dimensions to int32
+    K = tf.cast(filters_sparse.dense_shape[0], tf.int32)  # Kernel size
+    F = tf.cast(filters_sparse.dense_shape[3], tf.int32)  # Output filters
+    stride = tf.cast(stride, tf.int32)
+
+    # Compute output dimensions
+    if padding == 'SAME':
+        H_out = (H + stride - 1) // stride
+        W_out = (W + stride - 1) // stride
+        pad_top = ((H_out - 1) * stride + K - H) // 2
+        pad_bottom = ((H_out - 1) * stride + K - H) - pad_top
+        pad_left = ((W_out - 1) * stride + K - W) // 2
+        pad_right = ((W_out - 1) * stride + K - W) - pad_left
+    elif padding == 'VALID':
+        H_out = (H - K + stride) // stride
+        W_out = (W - K + stride) // stride
+        pad_top, pad_bottom, pad_left, pad_right = 0, 0, 0, 0
+    else:
+        raise ValueError("padding must be 'SAME' or 'VALID'")
+
+    # Early return if output would be empty
+    if tf.logical_or(H_out <= 0, W_out <= 0):
+        return tf.zeros(tf.stack([N, H_out, W_out, F]), dtype=input.dtype)
+
+    # Apply padding if needed
+    if tf.reduce_any([pad_top > 0, pad_bottom > 0, pad_left > 0, pad_right > 0]):
+        input_padded = tf.pad(input, [
+            [0, 0],
+            [pad_top, pad_bottom],
+            [pad_left, pad_right],
+            [0, 0]
+        ])
+    else:
+        input_padded = input
+
+    # Extract patches - shape [N, H_out, W_out, K*K*C]
+    patches = tf.image.extract_patches(
+        images=input_padded,
+        sizes=[1, K, K, 1],
+        strides=[1, stride, stride, 1],
+        rates=[1, 1, 1, 1],
+        padding='VALID'
+    )
+
+    # Reshape patches to [N*H_out*W_out, K*K*C]
+    patches_flat = tf.reshape(patches, [-1, K * K * C])
+
+    # Ensure filter dtype matches input dtype
+    if filters_sparse.dtype != input.dtype:
+        filters_sparse = tf.SparseTensor(
+            indices=filters_sparse.indices,
+            values=tf.cast(filters_sparse.values, input.dtype),
+            dense_shape=filters_sparse.dense_shape
+        )
+
+    # Reshape filters to [K*K*C, F]
+    filters_reshaped = tf.sparse.reshape(
+        filters_sparse,
+        [K * K * C, F]
+    )
+
+    # Correct matrix multiplication:
+    # We want output = patches_flat @ filters_reshaped
+    # So we need to transpose both matrices for sparse_dense_matmul:
+    # (filters_reshaped^T @ patches_flat^T)^T
+    output_flat = tf.transpose(
+        tf.sparse.sparse_dense_matmul(
+            tf.sparse.transpose(filters_reshaped),
+            tf.transpose(patches_flat),
+            adjoint_a=False,
+            adjoint_b=False
+        )
+    )
+
+    # Reshape output to [N, H_out, W_out, F]
+    return tf.reshape(output_flat, [N, H_out, W_out, F])
+
+#############################################################################
+
+'''def sparse_to_dense_conv2d(input, sp_filter, stride=1, padding='SAME'):
+    tf_sp = sp_filter.to_tf_sparse()
+    return direct_sparse_conv2d_3(input, tf_sp, stride=stride, padding=padding)
+
+    #tt = v4.create_tensor_row_major(3, 1, 5)
+    #conv1 = sp_filter.to_tf_dense()
+
+    #print(tf.reduce_max(tf.abs(dense_filter-conv1)))
+
+    return tf.nn.conv2d(input,dense_filter,stride,padding)'''
+def sparse_to_dense_conv2d(input, sp_filter, stride=1, padding='SAME'):
+    dense_filter = tf.sparse.to_dense(sp_filter.to_tf_sparse())
+
+
+
+    return tf.nn.conv2d(input,dense_filter,stride,padding)
+
+def matmul(X,Y_sp):
+    Y_dense = sparse_to_dense(Y_sp.indices, Y_sp.shape,Y_sp.values,
+                        default_value=0,
+                        validate_indices=True)
+    #TODO: b_is_sparse = True dà risultati diversi -- forse gli indici non sono corretti
+    return tf.matmul(X, Y_dense, b_is_sparse=False)
 
 
 if __name__ == '__main__':
