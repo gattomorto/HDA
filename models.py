@@ -608,7 +608,7 @@ class ResNet50_sparse2(tf.Module):
         return tf.nn.softmax(logits)
 '''
 
-'''
+
 #TODO: x = tf.nn.conv2d(x, self.w1, strides=..., padding=...) + self.b1 vs x = tf.nn.bias_add(tf.nn.conv2d(x, self.w1, strides=..., padding=...), self.b1)
 #TODO: dropput
 #TODO: SparseCategoricalCrossentropy(from_logits=True) cos'è?
@@ -716,6 +716,7 @@ class ResNet50_original(tf.Module):
 
         logits = tf.matmul(x, self.fc_w) + self.fc_b
         return tf.nn.softmax(logits)
+'''
 def ResNet50_keras(input_shape=(224, 224, 3), num_classes=1000):
     def resnet_stack(x, filters, blocks, stride1):
         # stride1 = 2 tranne il primo stack
@@ -777,7 +778,7 @@ def ResNet50_keras(input_shape=(224, 224, 3), num_classes=1000):
     outputs = layers.Dense(num_classes, activation="softmax")(x)
 
     return models.Model(inputs, outputs)
-'''
+
 
 # ConvBlockWithCheckpoint & ResNet50_keras_check sono insieme
 class ConvBlockWithCheckpoint(tf.keras.layers.Layer):
@@ -852,15 +853,17 @@ def ResNet50_keras_check(input_shape=(224, 224, 3), num_classes=1000):
     outputs = layers.Dense(num_classes, activation="softmax")(x)
 
     return models.Model(inputs, outputs)
-
+'''
 
 def main():
-    X_train, y_train = funzioni.load_bloodmnist_subset()
+    X_train, y_train = funzioni.load_bloodmnist_subset(); X_val = X_train; y_val = y_train
+
+    #(X_train, y_train), (X_test, y_test), (X_val, y_val) = funzioni.load_bloodmnist_224()
     #model = ResNet50_sparse(sparsity= 0, num_classes=8)
     #model = ResNet50_2( num_classes=8)
-    #model = ResNet50_original(num_classes=8)
+    model = ResNet50_original(num_classes=8)
     #model = ResNet50_sparse2_check(sparsity= 0.99, num_classes=8)
-    model = ResNet50_sparse2(sparsity= 0, num_classes=8)
+    #model = ResNet50_sparse2(sparsity= 0, num_classes=8)
     #model = ResNet50_keras(num_classes=8)
     #model = ResNet50_keras_check(num_classes=8)
 
@@ -881,7 +884,7 @@ def main():
     #  261250
     #   26568 sp = 1
 
-    funzioni.train(model, X_train, y_train, epochs=10, batch_size=2, lr=0.001, prune_and_regrow_step=3000)
+    funzioni.train(model, X_train, y_train, X_val,y_val, epochs=100, batch_size=1, lr=0.001, live_plotting=False,prune_and_regrow_step=3000)
 
 if __name__ == '__main__':
     main()
