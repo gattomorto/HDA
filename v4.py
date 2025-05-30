@@ -497,19 +497,12 @@ class ConvSparse(tf.Module):
         super().__init__(name=None)
         # ---- Convolutional Layer 1 ----
 
-
         self.conv1_w = funzioni.SparseTensor([3, 3, 1, 5],sparsity)
         self.conv1_b = tf.Variable(tf.zeros([5]), name="conv1_b")
-
-
         self.conv2_w = funzioni.SparseTensor([3, 3, 5, 8], sparsity)
         self.conv2_b = tf.Variable(tf.zeros([8]), name="conv2_b")
-
-
-
         self.fc1_w = funzioni.SparseTensor([7 * 7 * 8, 128],sparsity,name="fc1_wmio")
         self.fc1_b = tf.Variable(tf.zeros([128]), name="fc1_b")
-
         self.fc2_w = funzioni.SparseTensor([128, num_classes],sparsity,name="fc2_wmio")
         self.fc2_b = tf.Variable(tf.zeros([num_classes]), name="fc2_b")
 
@@ -525,14 +518,12 @@ class ConvSparse(tf.Module):
         x = tf.nn.relu(x)
         x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')  # [batch, 7, 7, 64]
 
-
         x = tf.reshape(x, [x.shape[0], -1])  # [batch, 7*7*64]
 
         x = conv.matmul(x, self.fc1_w) + self.fc1_b
         x = tf.nn.relu(x)
 
         logits = conv.matmul(x, self.fc2_w) + self.fc2_b
-
 
         return logits
 
@@ -669,7 +660,7 @@ def prune_layer(i, model):
     values_sorted =  tf.gather(model.W_values[i], idx)
     indices_sorted = tf.gather(model.W_indices[i], idx)
 
-    split_idx = tf.shape(values_sorted)[0] // 30
+    split_idx = tf.shape(values_sorted)[0] // 2
 
     indices_new = indices_sorted[split_idx:]
     values_new = values_sorted[split_idx:]
@@ -735,6 +726,7 @@ def regrow(model, momenta, to_regrow, layers,verbose=False):
 
         layers = non_saturated_layers
         remaining = tot_missing
+        #remaining = remaining - tot_regrown
         if verbose & (tot_missing != 0):
             print(f"Some layers are saturated, missing {tot_missing}, redistribution...")
 
@@ -873,7 +865,7 @@ def train(model, X, y, epochs, batch_size,lr ,prune_and_regrow_step ):
                 #acc = test_transpose(model,X,y)
                 #print(f"it: {it}, acc: {acc:.3f}")
                 print(f"Step {step:03d} | Loss: {loss}")
-                print(mem_usage())
+                #print(mem_usage())
                 #print(time.perf_counter() - start_time, "seconds")
 
                 #exit(-1)
@@ -927,17 +919,14 @@ def test_transpose(model, X, y):
 
 #TODO: capire. perchè hidden_dim = 1 dà problemi
 def main():
-    num_features = 784
-    num_classes = 10
-    hidden_dim = 1000
-    num_hidden_layers = 50
-    (X_train,y_train),(X_test,y_test)= load_mnist_data(flatten=True)
+    num_features = 2
+    num_classes = 2
+    hidden_dim = 2
+    num_hidden_layers = 1
+    #(X_train,y_train), (X_test,y_test) = load_mnist_data(flatten=True)
 
-    #X_train, y_train = generate_data(samples = 100, features=num_features, classes=num_classes)
-    # (1037.427734375, 3289.36328125, 2622.01171875, 3471.2890625) sparse ffn B1/B2
-    # (2401.93798828125, 5394.37109375, 3722.74609375, 5752.55859375) sparse ffn A1
-    # (1481.763671875, 3174.77734375, 2290.27734375, 3187.3359375) dense ffn
-    model = FFNsSparse(input_dim=num_features,hidden_dim=hidden_dim,output_dim=num_classes,num_hidden_layers=num_hidden_layers,sparsity=0.9,option='A1')
+    X_train, y_train = generate_data(samples = 100, features=num_features, classes=num_classes)
+    model = FFNsSparse(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes, num_hidden_layers=num_hidden_layers, sparsity=0.5, option='A1')
     #model = DenseFFN(input_dim=num_features, hidden_dim=hidden_dim, output_dim=num_classes, num_hidden_layers=num_hidden_layers)
     #model= ConvSparse_check(num_classes= 10)
     #model= ConvDense_original(num_classes= 10)
@@ -949,10 +938,10 @@ def main():
     exit()'''
 
     t = model.trainable_variables
-    trainable_count = sum(tf.size(v).numpy() for v in model.trainable_variables)
-    print("Total number of trainable scalars:", trainable_count)
-    train(model, X_train, y_train,epochs=500, batch_size=2048,lr= 0.01,
-          prune_and_regrow_step=3000)
+    #trainable_count = sum(tf.size(v).numpy() for v in model.trainable_variables)
+    #print("Total number of trainable scalars:", trainable_count)
+    train(model, X_train, y_train,epochs=500, batch_size=8,lr= 0.01,
+          prune_and_regrow_step=5)
 
 
 if __name__ == '__main__':

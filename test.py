@@ -1,6 +1,5 @@
 import unittest
 import psutil
-
 import funzioni
 import v4
 import numpy as np
@@ -10,271 +9,7 @@ import time
 import random
 import utils
 import gc
-
-
-class Regrow(unittest.TestCase):
-    @staticmethod
-    def create_indices(num_free,layer_idx,model):
-        '''
-        riempie W_indices[layer_idx] di indici casuali tale che ne rimangano liberi num_free
-
-        :param num_free:
-        :param layer_idx:
-        :param model:
-        :return: void
-        '''
-        rows, cols = model.W_shapes[layer_idx]
-        total = rows * cols
-        nnz = total- num_free
-        rng = np.random.default_rng(0)
-        chosen = rng.choice(total, size=nnz, replace=False)
-        indices = np.stack(np.unravel_index(chosen, model.W_shapes[layer_idx]), axis=1)
-        model.W_indices[layer_idx] = tf.constant(indices, dtype=tf.int64)
-
-    def test_A(self):
-
-        # nesun parametro è importante tranne num_hidden
-        m = v4.FFNsSparse3(input_dim=100,hidden_dim=100,output_dim=100,num_hidden_layers=3,sparsity=0)
-        #momenta deve contenere i momenti di ogni variabile per ogni layer
-        #quindi la prima lista deve essere di dimensione 14*14
-        #qui è stato fatto in modo tale che la media dei momenti per lay1 sia 6, poi 1,2,1
-        momenta = [[6,6,7,5],[1,2,0],[2],[1,1,0,0,2,2]]
-
-        m.W_shapes[0] = [14,14] #196 pesi
-        m.W_shapes[1] = [20,20]
-        m.W_shapes[2] = [10,10]
-        m.W_shapes[3] = [12,12]
-
-        self.create_indices(100,0,m)
-        self.create_indices(300,1,m)
-        self.create_indices(10,2,m)
-        self.create_indices(25,3,m)
-
-        nnz_before_regrowth = v4.get_total_nonzero_weights(m)
-
-        v4.regrow(m,momenta,200,[0,1,2,3])
-
-        l0_size=len(m.W_indices[0])
-        self.assertEqual(l0_size,14*14-0)#layer 0 deve essere pieno , quindi di dimenensione 196
-
-        l1_size=len(m.W_indices[1])
-        self.assertEqual(l1_size,20*20-235)#layer 1 deve avere 235 posizioni libere
-
-        l2_size=len(m.W_indices[2])
-        self.assertEqual(l2_size,10*10-0)#layer 2 deve essere saturo (0 posizioni libere)
-
-        l3_size=len(m.W_indices[3])
-        self.assertEqual(l3_size,12*12-0)#layer 3 deve essere saturo (0 posizioni libere)
-
-        nnz_after_regrowth = v4.get_total_nonzero_weights(m)
-        self.assertEqual(nnz_before_regrowth+200,nnz_after_regrowth)#devono essere stati distribuiti esattamente 200 pesi
-
-    def test_B(self):
-        '''
-        # si testa cosa succede se allocazione = spazio libero
-        '''
-        # nesun parametro è importante tranne num_hidden
-        m = v4.FFNsSparse3(input_dim=100,hidden_dim=100,output_dim=100,num_hidden_layers=3,sparsity=0)
-
-        momenta = [6,1,2,1]
-
-        m.W_shapes[0] = [14,14] #196 pesi
-        m.W_shapes[1] = [20,20]
-        m.W_shapes[2] = [10,10]
-        m.W_shapes[3] = [12,12]
-
-        self.create_indices(120,0,m)
-        self.create_indices(300,1,m)
-        self.create_indices(10,2,m)
-        self.create_indices(25,3,m)
-
-        nnz_before_regrowth = v4.get_total_nonzero_weights(m)
-
-        v4.regrow(m,momenta,200,[0,1,2,3])
-
-        l0_size=len(m.W_indices[0])
-        self.assertEqual(l0_size,14*14-0)#layer 0 deve essere pieno , quindi di dimenensione 196
-
-        l1_size=len(m.W_indices[1])
-        self.assertEqual(l1_size,20*20-255)#layer 1 deve avere 255 posizioni libere
-
-        l2_size=len(m.W_indices[2])
-        self.assertEqual(l2_size,10*10-0)#layer 2 deve essere saturo (0 posizioni libere)
-
-        l3_size=len(m.W_indices[3])
-        self.assertEqual(l3_size,12*12-0)#layer 3 deve essere saturo (0 posizioni libere)
-
-        nnz_after_regrowth = v4.get_total_nonzero_weights(m)
-        self.assertEqual(nnz_before_regrowth + 200, nnz_after_regrowth)  # devono essere stati distribuiti esattamente 200 pesi
-
-    def test_C(self):
-        '''
-        regrow 1 peso
-        '''
-        # nesun parametro è importante tranne num_hidden
-        m = v4.FFNsSparse3(input_dim=100,hidden_dim=100,output_dim=100,num_hidden_layers=3,sparsity=0)
-
-        momenta = [6,1,2,1]
-
-        m.W_shapes[0] = [14,14] #196 pesi
-        m.W_shapes[1] = [20,20]
-        m.W_shapes[2] = [10,10]
-        m.W_shapes[3] = [12,12]
-
-        self.create_indices(120,0,m)
-        self.create_indices(300,1,m)
-        self.create_indices(10,2,m)
-        self.create_indices(25,3,m)
-
-        nnz_before_regrowth = v4.get_total_nonzero_weights(m)
-
-        v4.regrow(m,momenta,1,[0,1,2,3])
-
-        l0_size=len(m.W_indices[0])
-        self.assertEqual(l0_size,14*14-119)# l'unico peso deve nascere in l0 (119 liberi)
-
-        l1_size=len(m.W_indices[1])
-        self.assertEqual(l1_size,20*20-300)#layer 1 invariato
-
-        l2_size=len(m.W_indices[2])
-        self.assertEqual(l2_size,10*10-10)#layer 2 invariato
-
-        l3_size=len(m.W_indices[3])
-        self.assertEqual(l3_size,12*12-25)#layer 3 invariato
-
-        nnz_after_regrowth = v4.get_total_nonzero_weights(m)
-        self.assertEqual(nnz_before_regrowth + 1, nnz_after_regrowth)
-
-    def test_D(self):
-        '''
-        regrow 1 peso con momenti uguali
-        devo ancora capire come gestire
-        '''
-        # nesun parametro è importante tranne num_hidden=1
-        m = v4.FFNsSparse3(input_dim=100,hidden_dim=100,output_dim=100,num_hidden_layers=1,sparsity=0)
-
-        momenta = [1,1]
-
-        m.W_shapes[0] = [14,14] #196 pesi
-        m.W_shapes[1] = [20,20]
-
-        self.create_indices(120,0,m)
-        self.create_indices(300,1,m)
-
-        debdt = v4.regrow(m,momenta,1,[0,1])
-        self.assertEqual(debdt,1)
-
-    def test_E(self):
-        '''
-        vedo cosa succede se si cercano di allocare piu pesi di quanti sono disponibili
-        '''
-        # nessun parametro è importante tranne num_hidden=1
-        m = v4.FFNsSparse3(input_dim=100,hidden_dim=100,output_dim=100,num_hidden_layers=1,sparsity=0)
-
-        momenta = [2,1]
-
-        m.W_shapes[0] = [2,2]#4 pesi
-        m.W_shapes[1] = [2,2]#4 pesi
-
-        self.create_indices(2,0,m)
-        self.create_indices(1,1,m)
-
-        with self.assertRaises(Exception) as context:
-            v4.regrow(m, momenta, 100, [0, 1])
-        self.assertIn("layers empty, probably to_grow > available space", str(context.exception))
-
-    #TODO
-    def test_F(self):
-        pass
-        #testare quando momentum sono a zero
-
-    def test_G(self):
-        '''
-        test regrow_layer
-        nota che non W1 è inizializzato ma non si usa
-        '''
-        # nessun parametro è importante tranne num_hidden=1
-        m = v4.FFNsSparse3(input_dim=100,hidden_dim=100,output_dim=100,num_hidden_layers=1,
-                           sparsity=0)
-
-        m.W_shapes[0] = [2,2]#4 pesi
-        m.W_shapes[1] = [2,2]#4 pesi
-
-        indices0 = np.array([[0,1],[1,0]])
-        values0 = np.array([    -1,
-                                   3    ],dtype=np.float32)
-
-        indices1 = np.array([[0,1]])
-        values1 = np.array([    -1,
-                                         ],dtype=np.float32)
-
-        m.W_indices[0] = tf.constant(indices0, dtype=tf.int64)
-        m.W_values[0] = tf.Variable(values0, name=f"W{0}_values", trainable=True)
-
-        m.W_indices[1] = tf.constant(indices1, dtype=tf.int64)
-        m.W_values[1] = tf.Variable(values1, name=f"W{1}_values", trainable=True)
-
-        regrown = v4.regrow_layer(0,m,200)
-        self.assertEqual(regrown,2)#perche ci sono solo due posti liberi
-
-        # in questo blocco si testa che indices0 corrispondano ancora agli stessi valori values0
-        new_indices0 =m.W_indices[0].numpy()
-        position_index_01 = np.where((new_indices0 == [0,1]).all(axis=1))[0]
-        value01 = m.W_values[0].numpy()[position_index_01]
-        self.assertEqual(-1,value01)
-        position_index_10 = np.where((new_indices0 == [1,0]).all(axis=1))[0]
-        value01 = m.W_values[0].numpy()[position_index_10]
-        self.assertEqual(3,value01)
-
-class Prune(unittest.TestCase):
-    def test_A(self):
-        '''
-        test funzionamento base di prune_layer
-        '''
-        m = v4.FFNsSparse3(input_dim=2,hidden_dim=2,output_dim=2,num_hidden_layers=0,sparsity=0)
-        values_before_pruning = np.array([0.1,-0.3,
-                                          0.01,0.4])
-        m.W_values[0] = tf.Variable(values_before_pruning, name=f"W{0}_values", trainable=True)
-        num_pruned = v4.prune_layer(0,m)
-
-        values_after_pruning = m.W_values[0].numpy()
-        # devono rimanere i due piu grandi in valore assoluto
-        self.assertTrue( np.array_equal(values_after_pruning,np.array([-0.3,0.4])))
-
-        indices_after_pruning = m.W_indices[0].numpy()
-        self.assertTrue( np.array_equal(indices_after_pruning,np.array([[0,1],[1,1]])))
-
-    def test_B(self):
-        '''
-        prune_layer in caso di tutti i pesi uguali
-        '''
-        m = v4.FFNsSparse3(input_dim=2,hidden_dim=2,output_dim=2,num_hidden_layers=0,sparsity=0)
-        values_before_pruning = np.array([-0.3, -0.3,
-                                         - 0.3, -0.3])
-        m.W_values[0] = tf.Variable(values_before_pruning, name=f"W{0}_values", trainable=True)
-        num_pruned = v4.prune_layer(0,m)
-
-        values_after_pruning = m.W_values[0].numpy()
-        self.assertTrue(np.array_equal(values_after_pruning,np.array([-0.3,-0.3])))
-
-    def test_C(self):
-        '''
-        prune_layer se gli indici non hanno un ordine particolare
-        '''
-        m = v4.FFNsSparse3(input_dim=2,hidden_dim=2,output_dim=2,num_hidden_layers=0,sparsity=0)
-        values_before_pruning = np.array([0.1,-0.3,
-                                          0.01,0.4])
-        m.W_values[0] = tf.Variable(values_before_pruning, name=f"W{0}_values", trainable=True)
-        m.W_indices[0] = np.array([[1,1],[0,0],
-                                   [0,1],[1,0]])
-        num_pruned = v4.prune_layer(0,m)
-
-        values_after_pruning = m.W_values[0].numpy()
-        self.assertTrue( np.array_equal(values_after_pruning,np.array([-0.3,0.4])))
-
-        indices_after_pruning = m.W_indices[0].numpy()
-        self.assertTrue( np.array_equal(indices_after_pruning,np.array([[0,0],[1,0]])))
-
+import models
 
 class Conv(unittest.TestCase):
 
@@ -311,7 +46,7 @@ class Conv(unittest.TestCase):
             Q_dense = tf.convert_to_tensor(Q_dense * mask)  # Apply sparsity
             Q_sp = tf.sparse.from_dense(Q_dense)'''
 
-            Q_sp = funzioni.SparseTensor((K, K, num_channels_in, num_channels_out), sparsity=sparsity)
+            Q_sp = models.SparseTensor((K, K, num_channels_in, num_channels_out), sparsity=sparsity)
             Q_dense = Q_sp.to_tf_dense()
 
 
@@ -369,7 +104,7 @@ class Conv(unittest.TestCase):
             Q_sp = tf.sparse.from_dense(Q_dense)
             Q_dense = tf.convert_to_tensor(Q_dense)
 
-            Q_sp = funzioni.SparseTensor((K, K, num_channels_in, num_channels_out), sparsity=sparsity)
+            Q_sp = models.SparseTensor((K, K, num_channels_in, num_channels_out), sparsity=sparsity)
             Q_dense = Q_sp.to_tf_dense()
 
 
@@ -434,7 +169,6 @@ class Conv(unittest.TestCase):
 
             print(utils.mem_usage())#peak memory
 
-
 class Varie(unittest.TestCase):
     def test_random_sparse_indices3(self):
         '''
@@ -461,6 +195,1059 @@ class Varie(unittest.TestCase):
 
             flat = np.ravel_multi_index(indices_np.T, shape, order='C')
             self.assertTrue(np.all(flat[:-1] <= flat[1:]))
+
+    def test_prune_and_regrow_stats0(self):
+        tensor = models.SparseTensor(tf.constant([[0.1, -0.3],
+                                                  [0.01,  0.4]]))
+
+        tensor.prune(rho=0.5)
+
+        self.assertEqual(tensor.num_pruned,2)
+        self.assertEqual(tensor.num_active_weights(),2)
+        self.assertEqual(tensor.num_inactive_weights(),2)
+        self.assertFalse(tensor.is_saturated())
+        self.assertEqual(tensor.num_weights(),4)
+        tensor.reset_prune_and_regrow_stats()
+        self.assertEqual(tensor.num_pruned,0)
+
+    def test_prune_and_regrow_stats1(self):
+        '''
+        '''
+        # 3x2x4 = 24
+        tensor =  models.SparseTensor(tf.constant([
+            [
+                [3.1, 1.2, -2.5, 7.8],
+                [4.2, 9.1, 1.3, -0.7]
+            ],
+            [
+                [6.7, -3.3, 2.3, 8.8],
+                [0.5, 2.0, 5.5, -1.1]
+            ],
+            [
+                [7.7, -4.5, 3.4, 1.0],
+                [2.2, -6.6, 3.0, 4.4]
+            ]
+        ], dtype=tf.float32))
+
+        tensor.prune(rho=0.1)
+        tensor.rowmajor_reorder()
+        tensor_check =  models.SparseTensor(tf.constant([
+            [
+                [3.1, 1.2, -2.5, 7.8],
+                [4.2, 9.1, 1.3, 0]
+            ],
+            [
+                [6.7, -3.3, 2.3, 8.8],
+                [0, 2.0, 5.5, -1.1]
+            ],
+            [
+                [7.7, -4.5, 3.4, 0],
+                [2.2, -6.6, 3.0, 4.4]
+            ]
+        ], dtype=tf.float32))
+
+
+        self.assertEqual(tensor.num_pruned,3)
+        self.assertEqual(tensor.num_active_weights(),24-3)
+        self.assertEqual(tensor.num_inactive_weights(),3)
+        self.assertFalse(tensor.is_saturated())
+        self.assertEqual(tensor.num_weights(),24)
+        tensor.reset_prune_and_regrow_stats()
+        self.assertEqual(tensor.num_pruned,0)
+
+    def test_prune_and_regrow_stats2(self):
+        '''
+        '''
+
+        # se tutti i valori sono interi, non funziona
+        tensor = models.SparseTensor(tf.constant([[0., -0],
+                                                  [0,   0]]))
+
+        tensor.prune(rho=0.5)
+        tensor.rowmajor_reorder()
+        tensor_check = models.SparseTensor(tf.constant([[0., 0],
+                                                        [0,  0]]))
+
+
+        self.assertEqual(tensor.num_pruned,0)
+        self.assertEqual(tensor.num_active_weights(),0)
+        self.assertEqual(tensor.num_inactive_weights(),4)
+        self.assertFalse(tensor.is_saturated())
+        self.assertEqual(tensor.num_weights(),4)
+        tensor.reset_prune_and_regrow_stats()
+        self.assertEqual(tensor.num_pruned,0)
+
+    def test_prune_and_regrow_stats3(self):
+        '''
+        '''
+        tensor = models.SparseTensor(tf.constant([[0.1, -0.3],
+                                                  [0.01, 0.4]]))
+
+        num_pruned = tensor.prune(rho=0.0)
+        tensor.rowmajor_reorder()
+        tensor_check = models.SparseTensor(tf.constant([[0.1, -0.3],
+                                                        [0.01, 0.4]]))
+
+        self.assertEqual(tensor.num_pruned,0)
+        self.assertEqual(tensor.num_active_weights(),4)
+        self.assertEqual(tensor.num_inactive_weights(),0)
+        self.assertTrue(tensor.is_saturated())
+        self.assertEqual(tensor.num_weights(),4)
+        tensor.reset_prune_and_regrow_stats()
+        self.assertEqual(tensor.num_pruned,0)
+
+class Prune(unittest.TestCase):
+    # ------------------------- Prune Layer --------------------------------
+    def test_A(self):
+        '''
+        rho = 0.5
+        '''
+        tensor = models.SparseTensor(tf.constant([[0.1, -0.3],
+                                                  [0.01,  0.4]]))
+
+        num_pruned = tensor.prune(rho=0.5)
+
+        # devono rimanere i due piu grandi in valore assoluto
+        tensor_check = models.SparseTensor(tf.constant([[0, -0.3],
+                                                        [0,  0.4]]))
+        self.assertTrue(tensor_check==tensor)
+        self.assertTrue(num_pruned==2)
+
+    def test_B(self):
+        '''
+        rho = 1
+        '''
+
+        tensor = models.SparseTensor(tf.constant([[0.1,  -0.3],
+                                                  [0.01,  0.4]]))
+        num_pruned = tensor.prune(rho=1)
+        tensor_check = models.SparseTensor(tf.constant([[.0, .0],
+                                                        [.0, .0]]))
+
+        self.assertTrue(tensor_check==tensor)
+        self.assertTrue(num_pruned==4)
+
+    def test_C(self):
+        '''
+        tutti valori uguali
+        '''
+        tensor = models.SparseTensor(tf.constant([[0.1, 0.1],
+                                                  [0.1, 0.1]]))
+        num_pruned = tensor.prune(rho=0.5)
+        self.assertTrue(np.array_equal(np.array([0.1, 0.1], dtype=np.float32), tensor.values.numpy()))
+        self.assertTrue(num_pruned == 2)
+
+    def test_D(self):
+        '''
+        rho = 0.25
+        '''
+        tensor = models.SparseTensor(tf.constant([[0.1, -0.3],
+                                                 [0.01, 0.4]]))
+
+        num_pruned = tensor.prune(rho=0.25)
+        tensor_check = models.SparseTensor(tf.constant([[0.1, -0.3],
+                                                        [0,    0.4]]))
+        self.assertTrue(tensor_check == tensor)
+        self.assertTrue(num_pruned == 1)
+
+    def test_E(self):
+        '''
+        rho = 0
+        '''
+        tensor = models.SparseTensor(tf.constant([[0.1, -0.3],
+                                                  [0.01, 0.4]]))
+
+        num_pruned = tensor.prune(rho=0.0)
+        # ci dovrebbe essere reorder() anche sugli altri, solo che per caso ritorna gia valori ordinati
+        tensor.rowmajor_reorder()
+        tensor_check = models.SparseTensor(tf.constant([[0.1, -0.3],
+                                                        [0.01, 0.4]]))
+        self.assertTrue(tensor_check == tensor)
+        self.assertTrue(num_pruned == 0)
+
+    def test_F(self):
+        '''
+        3d tensor
+        '''
+        # 3x2x4 = 24
+        tensor =  models.SparseTensor(tf.constant([
+            [
+                [3.1, 1.2, -2.5, 7.8],
+                [4.2, 9.1, 1.3, -0.7]
+            ],
+            [
+                [6.7, -3.3, 2.3, 8.8],
+                [0.5, 2.0, 5.5, -1.1]
+            ],
+            [
+                [7.7, -4.5, 3.4, 1.0],
+                [2.2, -6.6, 3.0, 4.4]
+            ]
+        ], dtype=tf.float32))
+
+        # 24*0.1 = 2.4
+        num_pruned = tensor.prune(rho=0.1)
+        tensor.rowmajor_reorder()
+
+        tensor_check =  models.SparseTensor(tf.constant([
+            [
+                [3.1, 1.2, -2.5, 7.8],
+                [4.2, 9.1, 1.3, 0]
+            ],
+            [
+                [6.7, -3.3, 2.3, 8.8],
+                [0, 2.0, 5.5, -1.1]
+            ],
+            [
+                [7.7, -4.5, 3.4, 0],
+                [2.2, -6.6, 3.0, 4.4]
+            ]
+        ], dtype=tf.float32))
+
+        self.assertTrue(tensor_check == tensor)
+        self.assertTrue(num_pruned == 3)
+
+    def test_G(self):
+        '''
+        prune an empty tensor
+        '''
+
+        # se tutti i valori sono interi, non funziona
+        tensor = models.SparseTensor(tf.constant([[0., -0],
+                                                  [0,   0]]))
+
+        num_pruned = tensor.prune(rho=0.5)
+        tensor.rowmajor_reorder()
+        tensor_check = models.SparseTensor(tf.constant([[0., 0],
+                                                        [0,  0]]))
+        self.assertTrue(tensor_check == tensor)
+        self.assertTrue(num_pruned == 0)
+
+    def test_I(self):
+        '''
+        3d tensor
+        '''
+        # 3x2x4 = 24
+        tensor =  models.SparseTensor(tf.constant([
+            [
+                [0, 2.3, 0, 0],
+                [0, 0, 0, 0]
+            ],
+            [
+                [0, 0, 0, 0],
+                [0, 2.0, -1, -0]
+            ],
+            [
+                [0, 0, -3.4, 0],
+                [0, 0, 0, 0]
+            ]
+        ], dtype=tf.float32))
+
+        num_pruned = tensor.prune(rho=0.5)
+        tensor.rowmajor_reorder()
+
+        tensor_check =  models.SparseTensor(tf.constant([
+            [
+                [0, 2.3, 0, 0],
+                [0, 0, 0, 0]
+            ],
+            [
+                [0, 0, 0, 0],
+                [0, 0, 0, -0]
+            ],
+            [
+                [0, 0, -3.4, 0],
+                [0, 0, 0, 0]
+            ]
+        ], dtype=tf.float32))
+
+        self.assertTrue(tensor_check == tensor)
+        self.assertTrue(num_pruned == 2)
+
+
+    # ------------------------- Prune Model --------------------------------
+
+    def test_H(self):
+        model = models.ResNet50_sparse2(sparsity=0.5)
+        del model.stage2
+        del model.stage3
+        del model.stage4
+        del model.stage5
+        del model.conv1_w
+        del model.fc_w
+
+        #tot = 3*2*4 = 24 -- 3 posizioni libere -- 21 occupate
+        model.W1 = models.SparseTensor([3,2,4],0.1,name="W1")
+
+        #tot = 216 -- 22 posizioni libere -- 194 occupate
+        model.W2 = models.SparseTensor([3,2,4,9],0.1,name = "W2")
+
+        #tot = 600 -- 60 posizioni libere -- 540 occupate
+        model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
+
+        model.sparse_tensors = model.get_sparse_tensors()
+
+        tot_pruned = model.prune(rho = 0.6)
+        # W1: 21*0.6 = 12.6 -> 13 pruned
+        # W2: 194*0.6 = 116.39 -> 117 pruned
+        # W3: 540*0.6 = 324 -> 324 pruned
+        # tot = 454
+
+        self.assertEqual(tot_pruned,454)
+        self.assertEqual(model.W1.num_inactive_weights(),3+13) # ce n'erano 3 libere e se ne sono liberate 3
+        self.assertEqual(model.W2.num_inactive_weights(),22+117)
+        self.assertEqual(model.W3.num_inactive_weights(),60+324)
+        self.assertEqual(model.num_pruned(),454)
+        self.assertEqual(model.W1.num_pruned,13)
+        self.assertEqual(model.W2.num_pruned,117)
+        self.assertEqual(model.W3.num_pruned,324)
+        self.assertEqual(model.W1.num_active_weights(),21-13)
+        self.assertEqual(model.W2.num_active_weights(),194-117)
+        self.assertEqual(model.W3.num_active_weights(),540-324)
+
+        print(model.prune_summary())
+
+class Regrow(unittest.TestCase):
+    @staticmethod
+    def sparse_indices_set_difference(A_indices, B_indices):
+        """
+        Returns the indices in A_indices that are not in B_indices.
+
+        Parameters:
+            A_indices: tf.Tensor of shape [n, rank]
+            B_indices: tf.Tensor of shape [m, rank]
+
+        Returns:
+            tf.Tensor of shape [k, rank], the set difference A_indices \ B_indices
+        """
+        A_exp = tf.expand_dims(A_indices, axis=1)  # [n, 1, rank]
+        B_exp = tf.expand_dims(B_indices, axis=0)  # [1, m, rank]
+
+        # Compare all combinations
+        equality_matrix = tf.reduce_all(tf.equal(A_exp, B_exp), axis=-1)  # [n, m]
+
+        # Does each A_index match any B_index?
+        any_match = tf.reduce_any(equality_matrix, axis=1)  # [n]
+
+        # Keep only A_indices that are not in B
+        difference = tf.boolean_mask(A_indices, ~any_match)
+
+        return difference
+
+    @staticmethod
+    def sparse_indices_is_subset(indicesA, indicesB):
+        """
+        Returns True if all elements in indicesA are also present in indicesB.
+
+        Args:
+            indicesA: tf.Tensor of shape [n, rank]
+            indicesB: tf.Tensor of shape [m, rank]
+
+        Returns:
+            tf.Tensor of shape [], dtype tf.bool
+        """
+        A_exp = tf.expand_dims(indicesA, axis=1)  # [n, 1, rank]
+        B_exp = tf.expand_dims(indicesB, axis=0)  # [1, m, rank]
+
+        equal_matrix = tf.reduce_all(tf.equal(A_exp, B_exp), axis=-1)  # [n, m]
+        match_found = tf.reduce_any(equal_matrix, axis=1)  # [n]
+
+        return tf.reduce_all(match_found)  # scalar bool: True if all A in B
+
+    @staticmethod
+    def sparse_indices_set_equal(indicesA, indicesB):
+        return tf.logical_and(
+            Regrow.sparse_indices_is_subset(indicesA, indicesB),
+            Regrow.sparse_indices_is_subset(indicesB, indicesA)
+        )
+
+    @staticmethod
+    def sparse_tensor_indices_equal_to_val(tens, ind, val):
+        """
+        Checks that all indices in `ind` exist in `tens`, and that their corresponding
+        values are all equal to `val`. Raises an error if any index in `ind` is missing.
+
+        Args:
+            tens: instance of SparseTensor (custom class)
+            ind: tf.Tensor of shape [k, rank], dtype int64
+            val: scalar value (same dtype as tens.values)
+
+        Returns:
+            tf.Tensor scalar boolean
+        """
+        ind_exp = tf.expand_dims(ind, axis=1)  # [k, 1, rank]
+        tens_indices_exp = tf.expand_dims(tens.indices, 0)  # [1, n, rank]
+
+        equal_matrix = tf.reduce_all(tf.equal(ind_exp, tens_indices_exp), axis=-1)  # [k, n]
+        match_found = tf.reduce_any(equal_matrix, axis=1)  # [k] boolean
+
+        # Assert all indices in `ind` are present in tens.indices
+        tf.debugging.assert_equal(
+            tf.reduce_all(match_found),
+            True,
+            message="Some indices in `ind` are not present in the SparseTensor."
+        )
+
+        # Get positions in tens.values that match
+        matched_indices_in_values = tf.argmax(tf.cast(equal_matrix, tf.int32), axis=1)  # [k]
+        matched_values = tf.gather(tens.values, matched_indices_in_values)  # [k]
+
+        # Check if all matched values equal val
+        return tf.reduce_all(tf.equal(matched_values, val))
+
+    # ----------------------------- Regrow Layer ------------------------------------------
+
+    def test_A(self):
+        '''
+        request = 1
+        '''
+
+        request = 1
+
+        #3x2x4
+        # 4 spazi disponibili
+        tensor = models.SparseTensor(tf.constant([
+            [
+                [0, 0, -2.5, 7.8],
+                [4.2, 9.1, 1.3, -0.7]
+            ],
+            [
+                [6.7, -3.3, 0, 8.8],
+                [0.5, 2.0, 5.5, -1.1]
+            ],
+            [
+                [7.7, 0, 3.4, 1.0],
+                [2.2, -6.6, 3.0, 4.4]
+            ]
+        ], dtype=tf.float32))
+
+        indices_before = tensor.indices
+
+        regrown = tensor.regrow(requested_growth=request)
+        indices_after = tensor.indices
+
+        # diff sono quelli aggiunti
+        diff = self.sparse_indices_set_difference(indices_after,indices_before)
+        self.assertEqual(diff.shape[0],request) #ci deve essere un elemento perchè è stato richiesto uno
+        self.assertEqual(regrown,request)
+
+        available = tf.constant([ [0,0,0],[0,0,1],[1,0,2],[2,0,1] ],dtype = tf.int64) # il nuovo indice deve essere uno tra quelli liberi
+        self.assertTrue(self.sparse_indices_is_subset(diff,available))
+
+        # controllo che tensor nelle nuove posizioni sia 0
+        self.assertTrue(self.sparse_tensor_indices_equal_to_val(tensor, diff, 0))
+    def test_B(self):
+        '''
+        request = 2
+        '''
+
+        request = 2
+
+        #3x2x4
+        # 4 spazi disponibili
+        tensor = models.SparseTensor(tf.constant([
+            [
+                [0, 0, -2.5, 7.8],
+                [4.2, 9.1, 1.3, -0.7]
+            ],
+            [
+                [6.7, -3.3, 0, 8.8],
+                [0.5, 2.0, 5.5, -1.1]
+            ],
+            [
+                [7.7, 0, 3.4, 1.0],
+                [2.2, -6.6, 3.0, 4.4]
+            ]
+        ], dtype=tf.float32))
+
+        indices_before = tensor.indices
+
+        regrown = tensor.regrow(requested_growth=request)
+        indices_after = tensor.indices
+
+        diff = self.sparse_indices_set_difference(indices_after,indices_before)
+        self.assertEqual(diff.shape[0],request)
+        self.assertEqual(regrown,request)
+
+        available = tf.constant([ [0,0,0],[0,0,1],[1,0,2],[2,0,1] ],dtype = tf.int64)
+
+        self.assertTrue(self.sparse_indices_is_subset(diff,available))
+        self.assertTrue(self.sparse_tensor_indices_equal_to_val(tensor, diff, 0))
+    def test_C(self):
+        '''
+        request = 3
+        '''
+
+        request = 3
+
+        #3x2x4
+        # 4 spazi disponibili
+        tensor = models.SparseTensor(tf.constant([
+            [
+                [0, 0, -2.5, 7.8],
+                [4.2, 9.1, 1.3, -0.7]
+            ],
+            [
+                [6.7, -3.3, 0, 8.8],
+                [0.5, 2.0, 5.5, -1.1]
+            ],
+            [
+                [7.7, 0, 3.4, 1.0],
+                [2.2, -6.6, 3.0, 4.4]
+            ]
+        ], dtype=tf.float32))
+
+        indices_before = tensor.indices
+
+        regrown = tensor.regrow(requested_growth=request)
+        indices_after = tensor.indices
+
+        diff = self.sparse_indices_set_difference(indices_after,indices_before)
+        self.assertEqual(diff.shape[0],request)
+        self.assertEqual(regrown,request)
+
+        available = tf.constant([ [0,0,0],[0,0,1],[1,0,2],[2,0,1] ],dtype = tf.int64)
+
+        self.assertTrue(self.sparse_indices_is_subset(diff,available))
+        self.assertTrue(self.sparse_tensor_indices_equal_to_val(tensor, diff, 0))
+    def test_D(self):
+        '''
+        request = max_available
+        '''
+
+        max_available = 4
+        request = max_available
+
+        #3x2x4
+        # 4 spazi disponibili
+        tensor = models.SparseTensor(tf.constant([
+            [
+                [0, 0, -2.5, 7.8],
+                [4.2, 9.1, 1.3, -0.7]
+            ],
+            [
+                [6.7, -3.3, 0, 8.8],
+                [0.5, 2.0, 5.5, -1.1]
+            ],
+            [
+                [7.7, 0, 3.4, 1.0],
+                [2.2, -6.6, 3.0, 4.4]
+            ]
+        ], dtype=tf.float32))
+
+        indices_before = tensor.indices
+
+        regrown = tensor.regrow(requested_growth=request)
+        indices_after = tensor.indices
+
+        diff = self.sparse_indices_set_difference(indices_after,indices_before)
+        self.assertEqual(diff.shape[0],request)
+        self.assertEqual(regrown,request)
+
+        available = tf.constant([ [0,0,0],[0,0,1],[1,0,2],[2,0,1] ],dtype = tf.int64)
+
+
+        #self.assertTrue(self.sparse_indices_is_subset(diff,available))
+        self.assertTrue(self.sparse_indices_set_equal(diff,available))
+        self.assertTrue(self.sparse_tensor_indices_equal_to_val(tensor, diff, 0))
+    def test_E(self):
+        '''
+        request = max_available + 10
+        '''
+
+        max_available = 4
+        request = max_available + 10
+
+        #3x2x4
+        # 4 spazi disponibili
+        tensor = models.SparseTensor(tf.constant([
+            [
+                [0, 0, -2.5, 7.8],
+                [4.2, 9.1, 1.3, -0.7]
+            ],
+            [
+                [6.7, -3.3, 0, 8.8],
+                [0.5, 2.0, 5.5, -1.1]
+            ],
+            [
+                [7.7, 0, 3.4, 1.0],
+                [2.2, -6.6, 3.0, 4.4]
+            ]
+        ], dtype=tf.float32))
+
+        indices_before = tensor.indices
+
+        regrown = tensor.regrow(requested_growth=request)
+        indices_after = tensor.indices
+
+        diff = self.sparse_indices_set_difference(indices_after,indices_before)
+        self.assertEqual(diff.shape[0],max_available)
+        self.assertEqual(regrown,max_available)
+
+        available = tf.constant([ [0,0,0],[0,0,1],[1,0,2],[2,0,1] ], dtype = tf.int64)
+
+        #self.assertTrue(self.sparse_indices_is_subset(diff,available))
+        self.assertTrue(self.sparse_indices_set_equal(diff,available))
+        self.assertTrue(self.sparse_tensor_indices_equal_to_val(tensor, diff, 0))
+    def test_F(self):
+        '''
+        0 available
+        '''
+
+        max_available = 0
+        request = max_available + 10
+
+        #3x2x4
+        # 0 spazi disponibili
+        tensor = models.SparseTensor(tf.constant([
+            [
+                [0.1, 0.2, -2.5, 7.8],
+                [4.2, 9.1, 1.3, -0.7]
+            ],
+            [
+                [6.7, -3.3, -0.9, 8.8],
+                [0.5, 2.0, 5.5, -1.1]
+            ],
+            [
+                [7.7, 0.01, 3.4, 1.0],
+                [2.2, -6.6, 3.0, 4.4]
+            ]
+        ], dtype=tf.float32))
+
+        indices_before = tensor.indices
+
+        regrown = tensor.regrow(requested_growth=request)
+        indices_after = tensor.indices
+
+        diff = self.sparse_indices_set_difference(indices_after,indices_before)
+        self.assertEqual(diff.shape[0],max_available)
+        self.assertEqual(regrown,max_available)
+
+        self.assertTrue(self.sparse_indices_set_equal(indices_before,indices_after))
+    def test_G(self):
+        '''
+        request = 0
+        '''
+
+        max_available = 4
+        request = 0
+
+        #3x2x4
+        # 4 spazi disponibili
+        tensor = models.SparseTensor(tf.constant([
+            [
+                [0, 0, -2.5, 7.8],
+                [4.2, 9.1, 1.3, -0.7]
+            ],
+            [
+                [6.7, -3.3, 0, 8.8],
+                [0.5, 2.0, 5.5, -1.1]
+            ],
+            [
+                [7.7, 0, 3.4, 1.0],
+                [2.2, -6.6, 3.0, 4.4]
+            ]
+        ], dtype=tf.float32))
+
+        indices_before = tensor.indices
+
+        regrown = tensor.regrow(requested_growth=request)
+        indices_after = tensor.indices
+
+        self.assertEqual(regrown,0)
+        self.assertTrue(self.sparse_indices_set_equal(indices_before,indices_after))
+    # ----------------------------- Regrow Model ------------------------------------------
+    def test_H(self):
+        '''
+        base
+        '''
+        model = models.ResNet50_sparse2(sparsity=0.5)
+        del model.stage2
+        del model.stage3
+        del model.stage4
+        del model.stage5
+        del model.conv1_w
+        del model.fc_w
+
+        #tot = 3*2*4 = 24 -- 3 posizioni libere -- 21 occupate
+        model.W1 = models.SparseTensor([3,2,4],0.1,name="W1")
+        model.W1.mean_momentum = 5
+
+        #tot = 216 -- 22 posizioni liberec -- 194 occupate
+        model.W2 = models.SparseTensor([3,2,4,9],0.1,name = "W2")
+        model.W2.mean_momentum = 4
+
+        #tot = 600 -- 60 posizioni libere -- 540 occupate
+        model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
+        model.W3.mean_momentum = 1
+
+        model.sparse_tensors = model.get_sparse_tensors()
+
+        #tot liberi = 85
+        model.regrow(to_regrow=80)
+
+        self.assertEqual(model.W1.num_inactive_weights(),0)
+        self.assertEqual(model.W2.num_inactive_weights(),0)
+        self.assertEqual(model.W3.num_inactive_weights(),5)
+        self.assertEqual(model.num_regrown(),80)
+        self.assertEqual(model.num_pruned(),0)
+        self.assertEqual(model.num_active_weights(),21+194+540+80)
+        self.assertEqual(model.num_inactive_weights(),5)
+
+        print(model.regrow_summary())
+
+    def test_I(self):
+        '''
+
+        '''
+        model = models.ResNet50_sparse2(sparsity=0.5)
+        del model.stage2
+        del model.stage3
+        del model.stage4
+        del model.stage5
+        del model.conv1_w
+        del model.fc_w
+
+        #tot = 3*2*4 = 24 -- 3 posizioni libere
+        model.W1 = models.SparseTensor([3,2,4],0.1,name="W1")
+        model.W1.mean_momentum = 5
+
+        #tot = 216 -- 22 posizioni libere
+        model.W2 = models.SparseTensor([3,2,4,9],0.1,name = "W2")
+        model.W2.mean_momentum = 4
+
+        #tot = 600 -- 60 posizioni libere
+        model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
+        model.W3.mean_momentum = 20
+
+        model.sparse_tensors = model.get_sparse_tensors()
+
+        #tot liberi = 85
+        model.regrow(to_regrow=81)
+
+        self.assertEqual(model.W1.num_inactive_weights(),0)
+        self.assertEqual(model.W2.num_inactive_weights(),4)
+        self.assertEqual(model.W3.num_inactive_weights(),0)
+
+        print(model.regrow_summary())
+
+    def test_L(self):
+        '''
+        qui il debito è distribuito su due rimanenti
+        '''
+        model = models.ResNet50_sparse2(sparsity=0.5)
+        del model.stage2
+        del model.stage3
+        del model.stage4
+        del model.stage5
+        del model.conv1_w
+        del model.fc_w
+
+        # 3 posizioni libere
+        model.W1 = models.SparseTensor([3,2,4],0.1,name="W1")
+        model.W1.mean_momentum = 1
+
+        # 65 posizioni libere
+        model.W2 = models.SparseTensor([3,2,4,9,3],0.1,name = "W2")
+        model.W2.mean_momentum = 5
+
+        # 60 posizioni libere
+        model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
+        model.W3.mean_momentum = 1
+
+        model.sparse_tensors = model.get_sparse_tensors()
+
+        model.regrow(to_regrow=81)
+
+        self.assertEqual(model.W1.num_inactive_weights(),0)
+        self.assertEqual(model.W2.num_inactive_weights(),0)
+        self.assertEqual(model.W3.num_inactive_weights(),47)
+
+        print(model.regrow_summary())
+
+    def test_M(self):
+        '''
+        request = max available
+        '''
+        model = models.ResNet50_sparse2(sparsity=0.5)
+        del model.stage2
+        del model.stage3
+        del model.stage4
+        del model.stage5
+        del model.conv1_w
+        del model.fc_w
+
+        # 3 posizioni libere
+        model.W1 = models.SparseTensor([3,2,4],0.1,name="W1")
+        model.W1.mean_momentum = 1
+
+        # 65 posizioni libere
+        model.W2 = models.SparseTensor([3,2,4,9,3],0.1,name = "W2")
+        model.W2.mean_momentum = 50
+
+        # 60 posizioni libere
+        model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
+        model.W3.mean_momentum = 1
+
+        model.sparse_tensors = model.get_sparse_tensors()
+
+        model.regrow(to_regrow=128)
+
+        self.assertEqual(model.W1.num_inactive_weights(),0)
+        self.assertEqual(model.W2.num_inactive_weights(),0)
+        self.assertEqual(model.W3.num_inactive_weights(),0)
+
+        print(model.regrow_summary())
+
+
+    def test_N(self):
+        '''
+        mean_momentum = 0
+        '''
+        model = models.ResNet50_sparse2(sparsity=0.5)
+        del model.stage2
+        del model.stage3
+        del model.stage4
+        del model.stage5
+        del model.conv1_w
+        del model.fc_w
+
+        # 3 posizioni libere
+        model.W1 = models.SparseTensor([3,2,4],0.1,name="W1")
+        model.W1.mean_momentum = 0
+
+        # 65 posizioni libere
+        model.W2 = models.SparseTensor([3,2,4,9,3],0.1,name = "W2")
+        model.W2.mean_momentum = 2
+
+        # 60 posizioni libere
+        model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
+        model.W3.mean_momentum = 0
+
+        model.sparse_tensors = model.get_sparse_tensors()
+
+        model.regrow(to_regrow=128)
+
+        self.assertEqual(model.W1.num_inactive_weights(),0)
+        self.assertEqual(model.W2.num_inactive_weights(),0)
+        self.assertEqual(model.W3.num_inactive_weights(),0)
+
+        print(model.regrow_summary())
+
+
+    def test_O(self):
+        '''
+        mean_momentum = 0
+        '''
+        model = models.ResNet50_sparse2(sparsity=0.5)
+        del model.stage2
+        del model.stage3
+        del model.stage4
+        del model.stage5
+        del model.conv1_w
+        del model.fc_w
+
+        # 48 posizioni libere
+        model.W1 = models.SparseTensor([3,2,4,20],0.1,name="W1")
+        model.W1.mean_momentum = 0
+
+        # 65 posizioni libere
+        model.W2 = models.SparseTensor([3,2,4,9,3],0.1,name = "W2")
+        model.W2.mean_momentum = 0
+
+        # 60 posizioni libere
+        model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
+        model.W3.mean_momentum = 0
+
+        model.sparse_tensors = model.get_sparse_tensors()
+
+        #tot liberi = 173
+
+        model.regrow(to_regrow=80)
+
+        self.assertEqual(model.W1.num_inactive_weights(),20)
+        self.assertEqual(model.W2.num_inactive_weights(),39)
+        self.assertEqual(model.W3.num_inactive_weights(),34)
+
+        print(model.regrow_summary())
+
+
+    def test_P(self):
+        '''
+        regrow > available
+        '''
+        model = models.ResNet50_sparse2(sparsity=0.5)
+        del model.stage2
+        del model.stage3
+        del model.stage4
+        del model.stage5
+        del model.conv1_w
+        del model.fc_w
+
+        # 48 posizioni libere
+        model.W1 = models.SparseTensor([3,2,4,20],0.1,name="W1")
+        model.W1.mean_momentum = 0
+
+        # 65 posizioni libere
+        model.W2 = models.SparseTensor([3,2,4,9,3],0.1,name = "W2")
+        model.W2.mean_momentum = 0
+
+        # 60 posizioni libere
+        model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
+        model.W3.mean_momentum = 0
+
+        model.sparse_tensors = model.get_sparse_tensors()
+
+        #tot liberi = 173
+
+        with self.assertRaises(Exception) as context:
+            model.regrow(to_regrow=174)
+        self.assertIn("Cannot regrow", str(context.exception))
+
+class Prune_and_Regrow(unittest.TestCase):
+    def test_A(self):
+        model = models.ResNet50_sparse2(sparsity=0.5)
+        del model.stage2
+        del model.stage3
+        del model.stage4
+        del model.stage5
+        del model.conv1_w
+        del model.conv1_b
+        del model.bn1
+        del model.fc_w
+        del model.fc_b
+
+        model.conv1_w = models.SparseTensor([3, 3, 1, 5], 0.5,name = "conv1_w")
+        model.conv1_b = tf.Variable(tf.zeros([5]), name="conv1_b")
+
+        model.conv2_w = models.SparseTensor([3, 3, 5, 8], 0.5, name = "conv2_w")
+        model.conv2_b = tf.Variable(tf.zeros([8]), name="conv2_b")
+
+        model.fc1_w = models.SparseTensor([7 * 7 * 8, 128], 0.5, name="fc1_w")
+        model.fc1_b = tf.Variable(tf.zeros([128]), name="fc1_b")
+
+        model.fc2_w = models.SparseTensor([128, 10], 0.5, name="fc2_w")
+        model.fc2_b = tf.Variable(tf.zeros([10]), name="fc2_b")
+
+        model.sparse_tensors = model.get_sparse_tensors()
+
+        def new_call(self, *args, **kwargs):
+            x = args[0]
+            x = conv.sparse_to_dense_conv2d(x, self.conv1_w, stride=1, padding='SAME')
+            x = tf.nn.bias_add(x, self.conv1_b)
+            x = tf.nn.relu(x)
+            x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')
+            x = conv.sparse_to_dense_conv2d(x, self.conv2_w, stride=1, padding='SAME')
+            x = tf.nn.bias_add(x, self.conv2_b)
+            x = tf.nn.relu(x)
+            x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')
+            x = tf.reshape(x, [x.shape[0], -1])
+            x = conv.matmul(x, self.fc1_w) + self.fc1_b
+            x = tf.nn.relu(x)
+            logits = conv.matmul(x, self.fc2_w) + self.fc2_b
+            return logits
+
+        models.ResNet50_sparse2.__call__ = new_call
+
+        (X_tr,y_tr), _ = utils.load_mnist_data(flatten=False)
+
+        SEED = 0
+        tf.random.set_seed(SEED)
+        np.random.seed(SEED)
+        random.seed(SEED)
+
+        t = model.trainable_variables
+
+        prune_and_regrow_stride = 5
+        optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+        loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+        dataset = tf.data.Dataset.from_tensor_slices((X_tr, y_tr)).batch(100)
+        it = 0
+        for epoch in range(1):
+            for step, (x_batch, y_batch) in enumerate(dataset):
+                it = it + 1
+                with tf.GradientTape() as tape:
+                    logits = model(x_batch, training=True)
+                    loss = loss_fn(y_batch, logits)
+                    print(f"loss: {loss}")
+
+                grads = tape.gradient(loss, model.trainable_variables)
+                optimizer.apply_gradients(zip(grads, model.trainable_variables))
+
+                if it % prune_and_regrow_stride == 0:
+
+                    t = model.trainable_variables
+
+                    print("Prune & Regrow")
+                    #print(model)
+                    model.prune_and_regrow(0.5,optimizer)
+                    optimizer = tf.keras.optimizers.Adam(learning_rate=float(optimizer.learning_rate.numpy()))
+
+                    t = model.trainable_variables
+                    pass
+
+    def test_B(self):
+        model = models.ResNet50_sparse2(sparsity=0.5)
+        del model.stage2
+        del model.stage3
+        del model.stage4
+        del model.stage5
+        del model.conv1_w
+        del model.fc_w
+
+        #tot = 3*2*4 = 24 -- 3 posizioni libere -- 21 occupate
+        model.W1 = models.SparseTensor([3,2,4],0.1,name="W1")
+
+        #tot = 216 -- 22 posizioni libere -- 194 occupate
+        model.W2 = models.SparseTensor([3,2,4,9],0.1,name = "W2")
+
+        #tot = 600 -- 60 posizioni libere -- 540 occupate
+        model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
+
+        model.sparse_tensors = model.get_sparse_tensors()
+
+        tot_pruned = model.prune(rho = 0.6)
+        # W1: 21*0.6 = 12.6 -> 13 pruned
+        # W2: 194*0.6 = 116.39 -> 117 pruned
+        # W3: 540*0.6 = 324 -> 324 pruned
+        # tot = 454
+
+        self.assertEqual(tot_pruned,454)
+        self.assertEqual(model.W1.num_inactive_weights(),3+13) # ce n'erano 3 libere e se ne sono liberate 3
+        self.assertEqual(model.W2.num_inactive_weights(),22+117)
+        self.assertEqual(model.W3.num_inactive_weights(),60+324)
+        self.assertEqual(model.num_pruned(),454)
+        self.assertEqual(model.W1.num_pruned,13)
+        self.assertEqual(model.W2.num_pruned,117)
+        self.assertEqual(model.W3.num_pruned,324)
+        self.assertEqual(model.W1.num_active_weights(),21-13)
+        self.assertEqual(model.W2.num_active_weights(),194-117)
+        self.assertEqual(model.W3.num_active_weights(),540-324)
+        print(model.prune_summary())
+
+        model.W1.rowmajor_reorder()
+        model.W2.rowmajor_reorder()
+        model.W3.rowmajor_reorder()
+
+        model.W1.mean_momentum = 1
+        model.W2.mean_momentum = 1
+        model.W3.mean_momentum = 1
+
+        model.regrow(tot_pruned)
+
+        self.assertTrue(model.W1.is_saturated())
+        self.assertTrue(model.W2.is_saturated())
+        self.assertEqual(model.W3.num_regrown,299)
+        self.assertEqual(model.num_regrown(),tot_pruned)
+        self.assertEqual(model.num_inactive_weights(),384-151-147-1)
+
+        print(model.regrow_summary())
+
+
+
+
+
+
 
 
 

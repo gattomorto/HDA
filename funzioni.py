@@ -4,9 +4,14 @@ import random
 import utils
 import gc
 from tensorflow.keras.utils import to_categorical
+#from google.colab import drive
+import os
 import matplotlib.pyplot as plt
-#from IPython.display import clear_output  # Optional for cleaner plots in Jupyter
 
+'''if not os.path.ismount('/content/drive'):
+    drive.mount('/content/drive')
+folder_path = '/content/drive/MyDrive/hda'
+import sys'''
 
 SEED = 0
 tf.random.set_seed(SEED)
@@ -16,6 +21,8 @@ random.seed(SEED)
 
 def load_bloodmnist_224():
     data = np.load("bloodmnist_224.npz")
+    #data = np.load(f"{folder_path}/bloodmnist_224.npz")
+
     X_train = data['train_images'].astype("float32") / 255.0
     y_train = data['train_labels']
     X_test = data['test_images'].astype("float32") / 255.0
@@ -63,6 +70,8 @@ def load_bloodmnist_224_new(save_subset=True):
 
 def load_bloodmnist_subset():
     data = np.load("bloodmnist_subset.npz")
+    #data = np.load(f"{folder_path}/bloodmnist_224.npz")
+
     X = data['X']
     y = data['y']
     print(f"Loaded subset: {X.shape}, {y.shape}")
@@ -243,13 +252,16 @@ def train(
     X_val,
     y_val,
     epochs,
+    max_iter,
     batch_size,
     lr,
-    prune_and_regrow_step,
+    prune_and_regrow_stride,
     patience=2,
-    plot_every=1,  # Plot every N steps
-    live_plotting=True  # Enable/disable live plotting
-):
+    plot_every=1,
+    live_plotting=True,
+    weights_chekpoint_stride = 3,
+    rho0=0.5):
+
     # Set random seeds for reproducibility
     SEED = 0
     tf.random.set_seed(SEED)
@@ -261,8 +273,8 @@ def train(
     loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
     dataset = tf.data.Dataset.from_tensor_slices((X_tr, y_tr)).batch(batch_size)
 
-    # Checkpoint setup
-    checkpoint_dir = './checkpoints'
+    # checkpoint_dir = './checkpoints'
+    checkpoint_dir = '/content/drive/MyDrive/hda/checkpoints'
     ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=optimizer, model=model)
     manager = tf.train.CheckpointManager(ckpt, checkpoint_dir, max_to_keep=1)
     ckpt.restore(manager.latest_checkpoint)
@@ -308,6 +320,10 @@ def train(
             grads = tape.gradient(loss, model.trainable_variables)
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
             it += 1
+            if it == max_iter:
+                print("max iter reached")
+                return
+
             ckpt.step.assign(it)
 
             # Print progress
@@ -325,12 +341,18 @@ def train(
                 plt.pause(0.01)  # Required for non-Jupyter environments
 
             # Checkpoint & validation
-            if it % 5 == 0:
+            if it % weights_chekpoint_stride == 0:
                 acc_tr = test2(model, X_tr, y_tr)
                 acc_val = test2(model, X_val, y_val)
                 print(f"Step {it}, Accuracy Train: {acc_tr:.3f},  Accuracy Val: {acc_val:.3f}")
                 #save_path = manager.save()
                 #print(f"Checkpoint saved: {save_path}")
+
+            if it % prune_and_regrow_stride == 0:
+                print("Prune & Regrow")
+                #model.prune_and_regrow(0.5, optimizer)
+                model.prune_and_regrow(rho0 ** (int(it/prune_and_regrow_stride)), optimizer)
+                optimizer = tf.keras.optimizers.Adam(learning_rate=float(optimizer.learning_rate.numpy()))
 
         # Epoch summary
         avg_epoch_loss = epoch_loss / num_batches
@@ -349,6 +371,11 @@ def train(
                 print(f"Reducing LR to {new_lr:.6f}")
                 patience_counter = 0
 
+        '''print("Prune & Regrow")
+        # print(model)
+        model.prune_and_regrow(rho0**epoch+1, optimizer)
+        optimizer = tf.keras.optimizers.Adam(learning_rate=float(optimizer.learning_rate.numpy()))'''
+
     # Final plot
     if live_plotting:
         clear_output(wait=True)
@@ -359,64 +386,5 @@ def train(
 
 
 
-
-
-class SparseTensor(tf.Module):
-    # shape generico row major
-    #TODO: cambia in sparse_indices_init & metti in init & rng & usare solo operazioni tf
-    #TODO: capire se devono essere ordinati
-    @staticmethod
-    def random_sparse_indices3(shape, sparsity):
-        SEED = 2
-        tf.random.set_seed(SEED)
-        np.random.seed(SEED)
-        random.seed(SEED)
-
-        total = np.prod(shape)
-        nnz = int((1.0 - sparsity) * total)  # Number of non-zero elements
-
-        rng = np.random.default_rng(0)
-        chosen = rng.choice(total, size=nnz, replace=False)
-
-        # Convert flat indices to multi-dimensional indices
-        unraveled = np.stack(np.unravel_index(chosen, shape), axis=-1)  # shape: (nnz, len(shape))
-
-        # Convert multi-dimensional indices back to flat indices in row-major order for sorting
-        flat_sorted_order = np.ravel_multi_index(unraveled.T, shape)
-        sorted_indices = unraveled[np.argsort(flat_sorted_order)]
-
-        return tf.constant(sorted_indices, dtype=tf.int64), nnz
-
-
-    def __init__(self, *args,  name=None):
-        SEED = 2
-        tf.random.set_seed(SEED)
-        np.random.seed(SEED)
-        random.seed(SEED)
-        super().__init__(name=name)
-
-        if len(args) == 2 and isinstance(args[0], list) and isinstance(args[1], (float,int)):
-            shape, sparsity = args
-            self.sparsity = sparsity
-            self.shape = shape
-            self.indices, nnz = self.random_sparse_indices3(shape, sparsity)
-            initializer = tf.keras.initializers.HeNormal()
-            self.values = tf.Variable(initializer(shape=[nnz]), name=name)
-            #self.values = tf.Variable(tf.random.normal([nnz]), name=name)
-        elif len(args) == 1 and isinstance(args[0], tf.Tensor):
-            dense_tensor = args[0]
-            tf_sparse = tf.sparse.from_dense(dense_tensor)
-            self.shape = tf_sparse.dense_shape
-            self.indices = tf_sparse.indices
-            self.values = tf.Variable(tf_sparse.values, name=name)
-        else:
-            raise TypeError("Invalid arguments for SparseTensor initialization. "
-                            "Expected either (shape: tuple, sparsity: float) or (dense_tensor: tf.Tensor).")
-
-    def to_tf_sparse(self):
-        return tf.sparse.SparseTensor(self.indices, self.values, self.shape)
-
-    def to_tf_dense(self):
-        return tf.sparse.to_dense(self.to_tf_sparse())
 
 
