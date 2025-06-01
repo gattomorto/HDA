@@ -327,7 +327,8 @@ def train(
             ckpt.step.assign(it)
 
             # Print progress
-            print(f"Step {it}, Loss: {loss.numpy():.4f}")
+            print(f"Step {it}, Loss: {loss.numpy()}")
+            print(utils.mem_usage())
 
             # Live plotting
             if live_plotting and (it % plot_every == 0):

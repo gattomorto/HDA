@@ -1,3 +1,7 @@
+import os
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '1'
+
+from tensorflow import recompute_grad
 import funzioni
 import tensorflow as tf
 import random
@@ -21,6 +25,7 @@ SEED = 0
 tf.random.set_seed(SEED)
 np.random.seed(SEED)
 random.seed(SEED)
+
 class SparseTensor(tf.Module):
     # shape generico row major
     #TODO: cambia in sparse_indices_init & metti in init & rng & usare solo operazioni tf
@@ -143,7 +148,6 @@ class SparseTensor(tf.Module):
         self.num_pruned = self.num_pruned + num_pruned
         return num_pruned
 
-    #TODO: mask = tf.constant([tuple(coord.numpy()) not in existing for coord in tf.unstack(all_coords, axis=0)]) -- Non è tracciabile, e può diventare lentissima con tensori grandi.
     def regrow_old(self, requested_growth):
         # Generate all possible indices
         shape = self.shape
@@ -176,7 +180,6 @@ class SparseTensor(tf.Module):
         self.num_regrown = self.num_regrown + actual_regrow.numpy()
 
         return actual_regrow.numpy()
-
 
     def regrow(self, requested_growth):
         # Convert existing indices to a dense boolean mask
@@ -239,7 +242,7 @@ class SparseTensor(tf.Module):
     def tensor_sparsity(self):
         return self.num_inactive_weights()/self.num_weights()
 
-# versione seria sparsa checkpoint
+# checkpointing parziale senza flag
 '''
 class ResNet50_sparse2(tf.Module):
     class ConvBlock(tf.Module):
@@ -248,20 +251,20 @@ class ResNet50_sparse2(tf.Module):
             self.stride = stride
             self.conv_shortcut = conv_shortcut
 
-            self.w1 = funzioni.SparseTensor([1, 1, in_channels, filters], sparsity, name="w1_M")
+            self.w1 = SparseTensor([1, 1, in_channels, filters], sparsity, name="w1_M")
             self.b1 = tf.Variable(tf.zeros([filters]), name="b1")
             self.bn1 = tf.keras.layers.BatchNormalization(name="bn1")
 
-            self.w2 = funzioni.SparseTensor([3, 3, filters, filters], sparsity, name="w2_M")
+            self.w2 = SparseTensor([3, 3, filters, filters], sparsity, name="w2_M")
             self.b2 = tf.Variable(tf.zeros([filters]), name="b2")
             self.bn2 = tf.keras.layers.BatchNormalization(name="bn2")
 
-            self.w3 = funzioni.SparseTensor([1, 1, filters, 4 * filters], sparsity, name="w3_M")
+            self.w3 = SparseTensor([1, 1, filters, 4 * filters], sparsity, name="w3_M")
             self.b3 = tf.Variable(tf.zeros([4 * filters]), name="b3")
             self.bn3 = tf.keras.layers.BatchNormalization(name="bn3")
 
             if conv_shortcut:
-                self.w_sc = funzioni.SparseTensor([1, 1, in_channels, 4 * filters], sparsity, name="w_sc_M")
+                self.w_sc = SparseTensor([1, 1, in_channels, 4 * filters], sparsity, name="w_sc_M")
                 self.b_sc = tf.Variable(tf.zeros([4 * filters]), name="b_sc")
                 self.bn_sc = tf.keras.layers.BatchNormalization(name="bn_sc")
 
@@ -308,11 +311,11 @@ class ResNet50_sparse2(tf.Module):
                 x = block(x, training=training)
             return x
 
-    def __init__(self, sparsity, num_classes=1000, name=None):
+    def __init__(self, sparsity, num_classes=8, name=None):
         super().__init__(name=name)
         self.num_classes = num_classes
 
-        self.conv1_w = funzioni.SparseTensor([7, 7, 3, 64], sparsity, name="conv1_w_M")
+        self.conv1_w = SparseTensor([7, 7, 3, 64], sparsity, name="conv1_w_M")
         self.conv1_b = tf.Variable(tf.zeros([64]), name="conv1_b")
         self.bn1 = tf.keras.layers.BatchNormalization(name="conv1_bn")
 
@@ -323,7 +326,7 @@ class ResNet50_sparse2(tf.Module):
         self.stage4 = ResNet50_sparse2.ResNetStack(512, 256, 6, stride1=2, sparsity=sparsity, name="conv4")
         self.stage5 = ResNet50_sparse2.ResNetStack(1024, 512, 3, stride1=2, sparsity=sparsity, name="conv5")
 
-        self.fc_w = funzioni.SparseTensor([2048, num_classes], sparsity, name="fc_w_M")
+        self.fc_w = SparseTensor([2048, num_classes], sparsity, name="fc_w_M")
         self.fc_b = tf.Variable(tf.zeros([num_classes]), name="fc_b")
 
     def __call__(self, x, training=False):
@@ -343,7 +346,6 @@ class ResNet50_sparse2(tf.Module):
         return tf.nn.softmax(logits)
 '''
 
-
 #versione seria sparsa senza check
 '''
 class ResNet50_sparse2(tf.Module):
@@ -357,23 +359,23 @@ class ResNet50_sparse2(tf.Module):
             # Conv layers
             #self.w1 = tf.Variable(initializer([1, 1, in_channels, filters]), name="w1")
             #self.w1 = tf.recompute_grad(funzioni.SparseTensor([1, 1, in_channels, filters],sparsity,name="w1_M"))
-            self.w1 = funzioni.SparseTensor([1, 1, in_channels, filters],sparsity,name="w1_M")
+            self.w1 = SparseTensor([1, 1, in_channels, filters],sparsity,name="w1_M")
             self.b1 = tf.Variable(tf.zeros([filters]), name="b1")
             self.bn1 = tf.keras.layers.BatchNormalization(name="bn1")
             #-----------------------------------------------------------------
             #self.w2 = tf.Variable(initializer([3, 3, filters, filters]), name="w2")
-            self.w2 = funzioni.SparseTensor([3, 3, filters, filters],sparsity,name="w2_M")
+            self.w2 = SparseTensor([3, 3, filters, filters],sparsity,name="w2_M")
             self.b2 = tf.Variable(tf.zeros([filters]), name="b2")
             self.bn2 = tf.keras.layers.BatchNormalization(name="bn2")
             #--------------------------------------------------------------------
             #self.w3 = tf.Variable(initializer([1, 1, filters, 4 * filters]), name="w3")
-            self.w3 = funzioni.SparseTensor([1, 1, filters, 4 * filters],sparsity,name="w3_M")
+            self.w3 = SparseTensor([1, 1, filters, 4 * filters],sparsity,name="w3_M")
             self.b3 = tf.Variable(tf.zeros([4 * filters]), name="b3")
             self.bn3 = tf.keras.layers.BatchNormalization(name="bn3")
 
             if conv_shortcut:
                 #self.w_sc = tf.Variable(initializer([1, 1, in_channels, 4 * filters]), name="w_sc")
-                self.w_sc = funzioni.SparseTensor([1, 1, in_channels, 4 * filters],sparsity, name="w_sc_M")
+                self.w_sc = SparseTensor([1, 1, in_channels, 4 * filters],sparsity, name="w_sc_M")
                 self.b_sc = tf.Variable(tf.zeros([4 * filters]), name="b_sc")
                 self.bn_sc = tf.keras.layers.BatchNormalization(name="bn_sc")
 
@@ -431,7 +433,7 @@ class ResNet50_sparse2(tf.Module):
             return x
 
 
-    def __init__(self, sparsity, num_classes=1000, name=None):
+    def __init__(self, sparsity, num_classes=8, name=None):
         super().__init__(name=name)
         self.num_classes = num_classes
 
@@ -439,7 +441,7 @@ class ResNet50_sparse2(tf.Module):
 
         # Initial conv
         #self.conv1_w = tf.Variable(initializer([7, 7, 3, 64]), name="conv1_w")
-        self.conv1_w = funzioni.SparseTensor([7, 7, 3, 64],sparsity,name = "conv1_w_M")
+        self.conv1_w = SparseTensor([7, 7, 3, 64],sparsity,name = "conv1_w_M")
         self.conv1_b = tf.Variable(tf.zeros([64]), name="conv1_b")
         self.bn1 = tf.keras.layers.BatchNormalization(name="conv1_bn")
 
@@ -453,7 +455,7 @@ class ResNet50_sparse2(tf.Module):
 
         # Final FC layer
         #self.fc_w = tf.Variable(initializer([2048, num_classes]), name="fc_w")
-        self.fc_w = funzioni.SparseTensor([2048, num_classes],sparsity ,name="fc_w_M")
+        self.fc_w = SparseTensor([2048, num_classes],sparsity ,name="fc_w_M")
         self.fc_b = tf.Variable(tf.zeros([num_classes]), name="fc_b")
 
     def __call__(self, x, training=False):
@@ -488,8 +490,8 @@ class ResNet50_sparse2(tf.Module):
         return tf.nn.softmax(logits)
 '''
 
-
-# ResNet50_sparse2 con modifiche per prune and regrow
+# prune and regrow
+'''
 class ResNet50_sparse2(tf.Module):
     class ConvBlock(tf.Module):
         def __init__(self, sparsity, in_channels, filters, stride=1, conv_shortcut=True, name=None):
@@ -616,7 +618,7 @@ class ResNet50_sparse2(tf.Module):
 
         return tf.nn.softmax(logits)
 
-    # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #########################################
+    # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
     def __str__(self):
         lines = []
@@ -859,11 +861,507 @@ class ResNet50_sparse2(tf.Module):
         lines.append("=" * sep_length)
         return "\n".join(lines)
 
-    def average_tensor_sparsity(self):
-        tot_sparsity = 0
+    def model_sparsity(self):
+        return self.num_inactive_weights()/self.num_weights()
+
+    def num_active_weights(self):
+        num_active_weights = 0
         for t in self.sparse_tensors:
-            tot_sparsity = tot_sparsity + t.tensor_sparsity()
-        return tot_sparsity/len(self.sparse_tensors)
+            num_active_weights = num_active_weights + t.num_active_weights()
+        return num_active_weights
+
+    def num_weights(self):
+        num_weights = 0
+        for t in self.sparse_tensors:
+            num_weights = num_weights + t.num_weights()
+        return num_weights
+
+    def num_inactive_weights(self):
+        return self.num_weights() - self.num_active_weights()
+'''
+
+# checkpointing v2
+'''
+class ResNet50_sparse2(tf.Module):
+    class ConvBlock(tf.Module):
+        def __init__(self, sparsity, in_channels, filters, stride=1, conv_shortcut=True, recompute=False, name=None):
+            super().__init__(name=name)
+            self.stride = stride
+            self.conv_shortcut = conv_shortcut
+            self.recompute = recompute
+
+            self.w1 = SparseTensor([1, 1, in_channels, filters], sparsity, name="w1_M")
+            self.b1 = tf.Variable(tf.zeros([filters]), name="b1")
+            self.bn1 = tf.keras.layers.BatchNormalization(name="bn1")
+
+            self.w2 = SparseTensor([3, 3, filters, filters], sparsity, name="w2_M")
+            self.b2 = tf.Variable(tf.zeros([filters]), name="b2")
+            self.bn2 = tf.keras.layers.BatchNormalization(name="bn2")
+
+            self.w3 = SparseTensor([1, 1, filters, 4 * filters], sparsity, name="w3_M")
+            self.b3 = tf.Variable(tf.zeros([4 * filters]), name="b3")
+            self.bn3 = tf.keras.layers.BatchNormalization(name="bn3")
+
+            if conv_shortcut:
+                self.w_sc = SparseTensor([1, 1, in_channels, 4 * filters], sparsity, name="w_sc_M")
+                self.b_sc = tf.Variable(tf.zeros([4 * filters]), name="b_sc")
+                self.bn_sc = tf.keras.layers.BatchNormalization(name="bn_sc")
+
+        def __call__(self, x, training=False):
+            def forward(x):
+                shortcut = x
+                if self.conv_shortcut:
+                    shortcut = conv.sparse_to_dense_conv2d(x, self.w_sc, stride=self.stride, padding="SAME") + self.b_sc
+                    shortcut = self.bn_sc(shortcut, training=training)
+
+                x = conv.sparse_to_dense_conv2d(x, self.w1, stride=self.stride, padding="SAME") + self.b1
+                x = self.bn1(x, training=training)
+                x = tf.nn.relu(x)
+
+                x = conv.sparse_to_dense_conv2d(x, self.w2, stride=1, padding="SAME") + self.b2
+                x = self.bn2(x, training=training)
+                x = tf.nn.relu(x)
+
+                x = conv.sparse_to_dense_conv2d(x, self.w3, stride=1, padding="SAME") + self.b3
+                x = self.bn3(x, training=training)
+
+                x = tf.nn.relu(x + shortcut)
+                return x
+
+            if self.recompute:
+                forward = tf.recompute_grad(forward)
+
+            return forward(x)
+
+    class ResNetStack(tf.Module):
+        def __init__(self, in_channels, filters, blocks, stride1, sparsity, recompute=False, name=None):
+            super().__init__(name=name)
+            self.blocks = []
+
+            self.blocks.append(
+                ResNet50_sparse2.ConvBlock(sparsity, in_channels, filters, stride=stride1, conv_shortcut=True, recompute=recompute, name="block1")
+            )
+            for i in range(2, blocks + 1):
+                self.blocks.append(
+                    ResNet50_sparse2.ConvBlock(sparsity, 4 * filters, filters, stride=1, conv_shortcut=False, recompute=recompute, name=f"block{i}")
+                )
+
+        def __call__(self, x, training=False):
+            for block in self.blocks:
+                x = block(x, training=training)
+            return x
+
+    def __init__(self, sparsity, num_classes=8, recompute=False, name=None):
+        super().__init__(name=name)
+        self.num_classes = num_classes
+        self.recompute = recompute
+
+        self.conv1_w = SparseTensor([7, 7, 3, 64], sparsity, name="conv1_w_M")
+        self.conv1_b = tf.Variable(tf.zeros([64]), name="conv1_b")
+        self.bn1 = tf.keras.layers.BatchNormalization(name="conv1_bn")
+
+        self.pool = lambda x: tf.nn.max_pool2d(x, ksize=3, strides=2, padding="SAME")
+
+        self.stage2 = ResNet50_sparse2.ResNetStack(64, 64, 3, stride1=1, sparsity=sparsity, recompute=recompute, name="conv2")
+        self.stage3 = ResNet50_sparse2.ResNetStack(256, 128, 4, stride1=2, sparsity=sparsity, recompute=recompute, name="conv3")
+        self.stage4 = ResNet50_sparse2.ResNetStack(512, 256, 6, stride1=2, sparsity=sparsity, recompute=recompute, name="conv4")
+        self.stage5 = ResNet50_sparse2.ResNetStack(1024, 512, 3, stride1=2, sparsity=sparsity, recompute=recompute, name="conv5")
+
+        self.fc_w = SparseTensor([2048, num_classes], sparsity, name="fc_w_M")
+        self.fc_b = tf.Variable(tf.zeros([num_classes]), name="fc_b")
+
+    def __call__(self, x, training=False):
+        def stem(x):
+            x = conv.sparse_to_dense_conv2d(x, self.conv1_w, stride=2, padding="SAME") + self.conv1_b
+            x = self.bn1(x, training=training)
+            x = tf.nn.relu(x)
+            x = self.pool(x)
+            return x
+
+        def head(x):
+            x = tf.reduce_mean(x, axis=[1, 2])  # Global Average Pooling
+            logits = conv.matmul(x, self.fc_w) + self.fc_b
+            return tf.nn.softmax(logits)
+
+        if self.recompute:
+            x = tf.recompute_grad(stem)(x)
+        else:
+            x = stem(x)
+
+        x = self.stage2(x, training=training)
+        x = self.stage3(x, training=training)
+        x = self.stage4(x, training=training)
+        x = self.stage5(x, training=training)
+
+        if self.recompute:
+            return tf.recompute_grad(head)(x)
+        else:
+            return head(x)
+'''
+
+
+# checkpointing v2 con prune & regrow
+class ResNet50_sparse2(tf.Module):
+    class ConvBlock(tf.Module):
+        def __init__(self, sparsity, in_channels, filters, stride=1, conv_shortcut=True, recompute=False, name=None):
+            super().__init__(name=name)
+            self.stride = stride
+            self.conv_shortcut = conv_shortcut
+            self.recompute = recompute
+
+            self.w1 = SparseTensor([1, 1, in_channels, filters], sparsity, name="w1_M")
+            self.b1 = tf.Variable(tf.zeros([filters]), name="b1")
+            self.bn1 = tf.keras.layers.BatchNormalization(name="bn1")
+
+            self.w2 = SparseTensor([3, 3, filters, filters], sparsity, name="w2_M")
+            self.b2 = tf.Variable(tf.zeros([filters]), name="b2")
+            self.bn2 = tf.keras.layers.BatchNormalization(name="bn2")
+
+            self.w3 = SparseTensor([1, 1, filters, 4 * filters], sparsity, name="w3_M")
+            self.b3 = tf.Variable(tf.zeros([4 * filters]), name="b3")
+            self.bn3 = tf.keras.layers.BatchNormalization(name="bn3")
+
+            if conv_shortcut:
+                self.w_sc = SparseTensor([1, 1, in_channels, 4 * filters], sparsity, name="w_sc_M")
+                self.b_sc = tf.Variable(tf.zeros([4 * filters]), name="b_sc")
+                self.bn_sc = tf.keras.layers.BatchNormalization(name="bn_sc")
+
+        def __call__(self, x, training=False):
+            def forward(x):
+                shortcut = x
+                if self.conv_shortcut:
+                    shortcut = conv.sparse_to_dense_conv2d(x, self.w_sc, stride=self.stride, padding="SAME") + self.b_sc
+                    shortcut = self.bn_sc(shortcut, training=training)
+
+                x = conv.sparse_to_dense_conv2d(x, self.w1, stride=self.stride, padding="SAME") + self.b1
+                x = self.bn1(x, training=training)
+                x = tf.nn.relu(x)
+
+                x = conv.sparse_to_dense_conv2d(x, self.w2, stride=1, padding="SAME") + self.b2
+                x = self.bn2(x, training=training)
+                x = tf.nn.relu(x)
+
+                x = conv.sparse_to_dense_conv2d(x, self.w3, stride=1, padding="SAME") + self.b3
+                x = self.bn3(x, training=training)
+
+                x = tf.nn.relu(x + shortcut)
+                return x
+
+            if self.recompute:
+                forward = tf.recompute_grad(forward)
+
+            return forward(x)
+
+    class ResNetStack(tf.Module):
+        def __init__(self, in_channels, filters, blocks, stride1, sparsity, recompute=False, name=None):
+            super().__init__(name=name)
+            self.blocks = []
+
+            self.blocks.append(
+                ResNet50_sparse2.ConvBlock(sparsity, in_channels, filters, stride=stride1, conv_shortcut=True, recompute=recompute, name="block1")
+            )
+            for i in range(2, blocks + 1):
+                self.blocks.append(
+                    ResNet50_sparse2.ConvBlock(sparsity, 4 * filters, filters, stride=1, conv_shortcut=False, recompute=recompute, name=f"block{i}")
+                )
+
+        def __call__(self, x, training=False):
+            for block in self.blocks:
+                x = block(x, training=training)
+            return x
+
+    def __init__(self, sparsity, num_classes=8, recompute=False, name=None):
+        super().__init__(name=name)
+        self.num_classes = num_classes
+        self.recompute = recompute
+
+        self.conv1_w = SparseTensor([7, 7, 3, 64], sparsity, name="conv1_w_M")
+        self.conv1_b = tf.Variable(tf.zeros([64]), name="conv1_b")
+        self.bn1 = tf.keras.layers.BatchNormalization(name="conv1_bn")
+
+        self.pool = lambda x: tf.nn.max_pool2d(x, ksize=3, strides=2, padding="SAME")
+
+        self.stage2 = ResNet50_sparse2.ResNetStack(64, 64, 3, stride1=1, sparsity=sparsity, recompute=recompute, name="conv2")
+        self.stage3 = ResNet50_sparse2.ResNetStack(256, 128, 4, stride1=2, sparsity=sparsity, recompute=recompute, name="conv3")
+        self.stage4 = ResNet50_sparse2.ResNetStack(512, 256, 6, stride1=2, sparsity=sparsity, recompute=recompute, name="conv4")
+        self.stage5 = ResNet50_sparse2.ResNetStack(1024, 512, 3, stride1=2, sparsity=sparsity, recompute=recompute, name="conv5")
+
+        self.fc_w = SparseTensor([2048, num_classes], sparsity, name="fc_w_M")
+        self.fc_b = tf.Variable(tf.zeros([num_classes]), name="fc_b")
+
+        self.sparse_tensors = self.get_sparse_tensors()
+
+
+    def __call__(self, x, training=False):
+        def stem(x):
+            x = conv.sparse_to_dense_conv2d(x, self.conv1_w, stride=2, padding="SAME") + self.conv1_b
+            x = self.bn1(x, training=training)
+            x = tf.nn.relu(x)
+            x = self.pool(x)
+            return x
+
+        def head(x):
+            x = tf.reduce_mean(x, axis=[1, 2])  # Global Average Pooling
+            logits = conv.matmul(x, self.fc_w) + self.fc_b
+            return tf.nn.softmax(logits)
+
+        if self.recompute:
+            x = tf.recompute_grad(stem)(x)
+        else:
+            x = stem(x)
+
+        x = self.stage2(x, training=training)
+        x = self.stage3(x, training=training)
+        x = self.stage4(x, training=training)
+        x = self.stage5(x, training=training)
+
+        if self.recompute:
+            return tf.recompute_grad(head)(x)
+        else:
+            return head(x)
+
+    # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+    def __str__(self):
+        lines = []
+        lines.append("ResNet50_sparse2 Model Summary")
+        lines.append("=" * 80)
+
+        # Table Header
+        lines.append(f"{'Layer Name':<30} {'Momentum Contribution':>25} {'Sparsity':>10} {'Active / Total':>15}")
+        lines.append("-" * 80)
+
+        self.update_relative_momentum_contributions(self.sparse_tensors)
+
+        for tensor in self.sparse_tensors:
+            active = tensor.num_active_weights()
+            total = tensor.num_weights()
+            sparsity = tensor.tensor_sparsity()
+            momentum_pct = f"{tensor.relative_momentum_contribution:.1%}"
+            sparsity_str = f"{sparsity:.1%}"
+
+            lines.append(
+                f"{tensor.name:<30} {momentum_pct:>25} {sparsity_str:>10} {f'{active:,} / {total:,}':>15}"
+            )
+
+        lines.append("-" * 80)
+
+        # Model-level summary
+        model_sparsity = self.model_sparsity()
+        model_active = self.num_active_weights()
+        model_total = self.num_weights()
+
+        lines.append(f"{'Overall Model Sparsity:':<30} {model_sparsity:.1%}")
+        lines.append(f"{'Total Active / Total Weights:':<30} {model_active:,} / {model_total:,}")
+
+        lines.append("=" * 80)
+        return "\n".join(lines)
+
+    # TODO: sembra un getter
+    def get_sparse_tensors(self):
+        prunable = []
+        def collect_sparse(module):
+            # Include attributes of this module
+            for attr_name in dir(module):
+                attr = getattr(module, attr_name)
+                if isinstance(attr, SparseTensor):
+                    prunable.append(attr)
+        collect_sparse(self)
+        for submodule in self.submodules:
+            collect_sparse(submodule)
+        return prunable
+
+    def prune(self, rho):
+        prunable = self.sparse_tensors
+        tot_pruned = 0
+        for i, tensor in enumerate(prunable):
+            pruned_i = tensor.prune(rho=rho)
+            tot_pruned = tot_pruned + pruned_i
+        return tot_pruned
+
+    def update_relative_momentum_contributions(self, tensors):
+        total = sum(t.mean_momentum for t in tensors)
+        if total == 0:
+            equal_share = 1.0 / len(tensors)
+            for t in tensors:
+                t.relative_momentum_contribution = equal_share
+        else:
+            for t in tensors:
+                t.relative_momentum_contribution = t.mean_momentum / total
+
+
+    def update_mean_momentums(self, optimizer):
+        for sparse_tensor in self.sparse_tensors:
+            w = sparse_tensor.values
+            idx = optimizer._get_variable_index(w)
+            momentum_tensor = optimizer._momentums[idx]
+            sparse_tensor.mean_momentum = tf.reduce_mean(tf.abs(momentum_tensor))
+
+    def regrow(self, to_regrow):
+        # se vuoi capire perchè esiste regrowth_residual pensa al caso in cui to_regrow = 1
+
+        if to_regrow > self.num_inactive_weights():
+            raise ValueError(
+                f"Cannot regrow {to_regrow} elements. "
+                f"Only {self.num_inactive_weights()} positions available."
+            )
+
+        tot_regrown = 0
+        remaining_to_allocate  = to_regrow
+        active_tensors = self.sparse_tensors
+
+        while remaining_to_allocate  != 0:
+            self.update_relative_momentum_contributions(active_tensors)
+            total_deficit = 0
+            unsaturated_tensors = []
+            for t in active_tensors:
+                expected_regrow = int(remaining_to_allocate  * t.relative_momentum_contribution)
+
+                actual_regrow = t.regrow(requested_growth=expected_regrow)
+                tot_regrown = tot_regrown + actual_regrow
+                deficit = expected_regrow - actual_regrow
+                total_deficit = total_deficit + deficit
+                if not t.is_saturated():
+                    unsaturated_tensors.append(t)
+
+            active_tensors = unsaturated_tensors
+            remaining_to_allocate  = total_deficit
+
+        residual = to_regrow - tot_regrown
+        for t in active_tensors:
+            regrown = t.regrow(residual)
+            residual = residual-regrown
+            if residual == 0:
+                return
+
+    def prune_and_regrow(self,rho,optimizer):
+        print(f"rho: {rho}")
+        self.update_mean_momentums(optimizer)
+        self.reset_prune_and_regrow_stats()
+        num_pruned = self.prune(rho)
+        #print(self.prune_summary())
+        self.regrow(num_pruned)
+        #print(self.regrow_summary())
+
+    def reset_prune_and_regrow_stats(self):
+        for t in self.sparse_tensors:
+            t.reset_prune_and_regrow_stats()
+
+    def num_pruned(self):
+        tot_pruned = 0
+        for t in self.sparse_tensors:
+            tot_pruned = tot_pruned + t.num_pruned
+        return tot_pruned
+
+    def num_regrown(self):
+        tot_regrown = 0
+        for t in self.sparse_tensors:
+            tot_regrown = tot_regrown + t.num_regrown
+        return tot_regrown
+
+    def prune_summary(self):
+        """Returns a detailed summary of pruning statistics for all sparse tensors.
+
+        Returns:
+            str: Formatted string containing pruning statistics for each tensor and global summary.
+        """
+
+        sep_length = 81
+
+        lines = []
+        lines.append("Pruning Summary")
+        lines.append("=" * sep_length)
+
+        # Table header
+        lines.append(
+            f"{'Layer Name':<15} {'Active/Total (b)':>22} {'Pruned':>8} {'Active/Total (a)':>22} {'Sparsity':>10}")
+        lines.append("-" * sep_length)
+
+        # Update momentum contributions
+        self.update_relative_momentum_contributions(self.sparse_tensors)
+
+        for tensor in self.sparse_tensors:
+            active = tensor.num_active_weights()
+            total = tensor.num_weights()
+            pruned = tensor.num_pruned
+            active_before_pruning = active + pruned
+            sparsity = tensor.tensor_sparsity()
+
+            lines.append(
+                f"{tensor.name:<15} {f'{active_before_pruning:,}/{total:,}':>22} {pruned:>8} "
+                f"{f'{active:,}/{total:,}':>22} {f'{sparsity:.1%}':>10}"
+            )
+
+        lines.append("-" * sep_length)
+
+        # Right-aligned global summary
+        def right_align(label, value):
+            left = f"{label}"
+            right = f"{value}"
+            total_width = sep_length
+            return f"{left}{' ' * (total_width - len(left) - len(right))}{right}"
+
+        lines.append(right_align("Total Pruned Weights: ", f"{self.num_pruned():,}"))
+        lines.append(right_align("Model Sparsity: ", f"{self.model_sparsity():.1%}"))
+        lines.append(
+            right_align("Total Active/Total Weights: ", f"{self.num_active_weights():,}/{self.num_weights():,}"))
+
+        lines.append("=" * sep_length)
+        return "\n".join(lines)
+
+    def regrow_summary(self):
+        """Returns a detailed summary of regrowth statistics for all sparse tensors.
+
+        Returns:
+            str: Formatted string containing regrowth statistics for each tensor and global summary.
+        """
+        sep_length = 88
+        lines = []
+        lines.append("Regrowth Summary")
+        lines.append("=" * sep_length)
+
+        # Table Header
+        lines.append(
+            f"{'Layer Name':<15} {'Momentum':>10} {'Active/Total (b)':>20} "
+            f"{'Regrown':>8} {'Active/Total (a)':>20} {'Sparsity':>10}"
+        )
+        lines.append("-" * sep_length)
+
+        total_regrown = 0
+
+        # Update momentum contributions
+        self.update_relative_momentum_contributions(self.sparse_tensors)
+
+        for tensor in self.sparse_tensors:
+            active_after = tensor.num_active_weights()
+            total = tensor.num_weights()
+            regrown = tensor.num_regrown
+            active_before = active_after - regrown
+            sparsity = tensor.tensor_sparsity()
+            momentum_pct = f"{tensor.relative_momentum_contribution:.1%}"
+
+            lines.append(
+                f"{tensor.name:<15} {momentum_pct:>10} {f'{active_before:,}/{total:,}':>20} "
+                f"{regrown:>8} {f'{active_after:,}/{total:,}':>20} {f'{sparsity:.1%}':>10}"
+            )
+            total_regrown += regrown
+
+        lines.append("-" * sep_length)
+
+        # Right-aligned global summary
+        def right_align(label, value):
+            left = f"{label}"
+            right = f"{value}"
+            total_width = sep_length
+            return f"{left}{' ' * (total_width - len(left) - len(right))}{right}"
+
+        lines.append(right_align("Total Regrown Weights: ", f"{total_regrown:,}"))
+        lines.append(right_align("Model Sparsity: ", f"{self.model_sparsity():.1%}"))
+        lines.append(
+            right_align("Total Active/Total Weights: ", f"{self.num_active_weights():,}/{self.num_weights():,}"))
+
+        lines.append("=" * sep_length)
+        return "\n".join(lines)
 
     def model_sparsity(self):
         return self.num_inactive_weights()/self.num_weights()
@@ -885,12 +1383,8 @@ class ResNet50_sparse2(tf.Module):
 
 
 
-
-
-    
-
 '''
-#ResNet50_sparse & ResNet50_2(non sparse) ResNet50_sparse2(checkpointed) devono dare gli stessi risultati -- servono solo per il debug
+#ResNet50_sparse & ResNet50_2(non sparse) ResNet50_sparse2(checkpointed v1/v2) devono dare gli stessi risultati -- servono solo per il debug -- ricorda di disabilitare oneNN custom ops
 class ResNet50_sparse(tf.Module):
     class ConvBlock(tf.Module):
         def __init__(self, sparsity, in_channels, filters, stride=1, conv_shortcut=True, name=None):
@@ -901,23 +1395,23 @@ class ResNet50_sparse(tf.Module):
 
             # Conv layers
             #self.w1 = tf.Variable(initializer([1, 1, in_channels, filters]), name="w1")
-            self.w1 = funzioni.SparseTensor(v4.create_tensor_row_major(1, in_channels, filters),name="w1mio")
+            self.w1 = SparseTensor(v4.create_tensor_row_major(1, in_channels, filters),name="w1mio")
             self.b1 = tf.Variable(tf.zeros([filters]), name="b1")
             self.bn1 = tf.keras.layers.BatchNormalization(name="bn1")
             #-----------------------------------------------------------------
             #self.w2 = tf.Variable(initializer([3, 3, filters, filters]), name="w2")
-            self.w2 = funzioni.SparseTensor(v4.create_tensor_row_major(3, filters, filters),name="w2mio")
+            self.w2 = SparseTensor(v4.create_tensor_row_major(3, filters, filters),name="w2mio")
             self.b2 = tf.Variable(tf.zeros([filters]), name="b2")
             self.bn2 = tf.keras.layers.BatchNormalization(name="bn2")
             #--------------------------------------------------------------------
             #self.w3 = tf.Variable(initializer([1, 1, filters, 4 * filters]), name="w3")
-            self.w3 = funzioni.SparseTensor(v4.create_tensor_row_major(1, filters, 4*filters),name="w3mio")
+            self.w3 = SparseTensor(v4.create_tensor_row_major(1, filters, 4*filters),name="w3mio")
             self.b3 = tf.Variable(tf.zeros([4 * filters]), name="b3")
             self.bn3 = tf.keras.layers.BatchNormalization(name="bn3")
 
             if conv_shortcut:
                 #self.w_sc = tf.Variable(initializer([1, 1, in_channels, 4 * filters]), name="w_sc")
-                self.w_sc = funzioni.SparseTensor(v4.create_tensor_row_major(1, in_channels, 4 * filters), name="w_scmio")
+                self.w_sc = SparseTensor(v4.create_tensor_row_major(1, in_channels, 4 * filters), name="w_scmio")
                 self.b_sc = tf.Variable(tf.zeros([4 * filters]), name="b_sc")
                 self.bn_sc = tf.keras.layers.BatchNormalization(name="bn_sc")
 
@@ -970,7 +1464,7 @@ class ResNet50_sparse(tf.Module):
 
         # Initial conv
         #self.conv1_w = tf.Variable(initializer([7, 7, 3, 64]), name="conv1_w")
-        self.conv1_w = funzioni.SparseTensor(v4.create_tensor_row_major(7, 3, 64), name="conv1_wmio")
+        self.conv1_w = SparseTensor(v4.create_tensor_row_major(7, 3, 64), name="conv1_wmio")
         self.conv1_b = tf.Variable(tf.zeros([64]), name="conv1_b")
         self.bn1 = tf.keras.layers.BatchNormalization(name="conv1_bn")
 
@@ -984,7 +1478,7 @@ class ResNet50_sparse(tf.Module):
 
         # Final FC layer
         #self.fc_w = tf.Variable(initializer([2048, num_classes]), name="fc_w")
-        self.fc_w = funzioni.SparseTensor([2048, num_classes],0 ,name="fc_wmio")
+        self.fc_w = SparseTensor([2048, num_classes],0 ,name="fc_wmio")
         self.fc_b = tf.Variable(tf.zeros([num_classes]), name="fc_b")
 
     def __call__(self, x, training=False):
@@ -1100,7 +1594,7 @@ class ResNet50_2(tf.Module):
 
         # Final FC layer
         #self.fc_w = tf.Variable(initializer([2048, num_classes]), name="fc_w")
-        self.fc_w =  tf.Variable(funzioni.SparseTensor([2048, num_classes],0 ,name="fc_wmio").to_tf_dense(), name="fc_wmio")
+        self.fc_w =  tf.Variable(SparseTensor([2048, num_classes],0 ,name="fc_wmio").to_tf_dense(), name="fc_wmio")
         self.fc_b = tf.Variable(tf.zeros([num_classes]), name="fc_b")
 
     def __call__(self, x, training=False):
@@ -1122,6 +1616,7 @@ class ResNet50_2(tf.Module):
 
         logits = tf.matmul(x, self.fc_w) + self.fc_b
         return tf.nn.softmax(logits)
+#v1 (senza il flag & alcuni layer non sono ricalcolati)
 class ResNet50_sparse2(tf.Module):
     class ConvBlock(tf.Module):
         def __init__(self, sparsity, in_channels, filters, stride=1, conv_shortcut=True, name=None):
@@ -1129,23 +1624,23 @@ class ResNet50_sparse2(tf.Module):
             self.stride = stride
             self.conv_shortcut = conv_shortcut
 
-            self.w1 = funzioni.SparseTensor(v4.create_tensor_row_major(1, in_channels, filters),name="w1mio")
+            self.w1 = SparseTensor(v4.create_tensor_row_major(1, in_channels, filters),name="w1mio")
             #self.w1 = funzioni.SparseTensor([1, 1, in_channels, filters], sparsity, name="w1_M")
             self.b1 = tf.Variable(tf.zeros([filters]), name="b1")
             self.bn1 = tf.keras.layers.BatchNormalization(name="bn1")
 
-            self.w2 = funzioni.SparseTensor(v4.create_tensor_row_major(3, filters, filters),name="w2mio")
+            self.w2 = SparseTensor(v4.create_tensor_row_major(3, filters, filters),name="w2mio")
             #self.w2 = funzioni.SparseTensor([3, 3, filters, filters], sparsity, name="w2_M")
             self.b2 = tf.Variable(tf.zeros([filters]), name="b2")
             self.bn2 = tf.keras.layers.BatchNormalization(name="bn2")
 
-            self.w3 = funzioni.SparseTensor(v4.create_tensor_row_major(1, filters, 4*filters),name="w3mio")
+            self.w3 = SparseTensor(v4.create_tensor_row_major(1, filters, 4*filters),name="w3mio")
             #self.w3 = funzioni.SparseTensor([1, 1, filters, 4 * filters], sparsity, name="w3_M")
             self.b3 = tf.Variable(tf.zeros([4 * filters]), name="b3")
             self.bn3 = tf.keras.layers.BatchNormalization(name="bn3")
 
             if conv_shortcut:
-                self.w_sc = funzioni.SparseTensor(v4.create_tensor_row_major(1, in_channels, 4 * filters), name="w_scmio")
+                self.w_sc = SparseTensor(v4.create_tensor_row_major(1, in_channels, 4 * filters), name="w_scmio")
 
                 #self.w_sc = funzioni.SparseTensor([1, 1, in_channels, 4 * filters], sparsity, name="w_sc_M")
                 self.b_sc = tf.Variable(tf.zeros([4 * filters]), name="b_sc")
@@ -1199,7 +1694,7 @@ class ResNet50_sparse2(tf.Module):
         self.num_classes = num_classes
 
         #self.conv1_w = funzioni.SparseTensor([7, 7, 3, 64], sparsity, name="conv1_w_M")
-        self.conv1_w = funzioni.SparseTensor(v4.create_tensor_row_major(7, 3, 64), name="conv1_wmio")
+        self.conv1_w = SparseTensor(v4.create_tensor_row_major(7, 3, 64), name="conv1_wmio")
 
         self.conv1_b = tf.Variable(tf.zeros([64]), name="conv1_b")
         self.bn1 = tf.keras.layers.BatchNormalization(name="conv1_bn")
@@ -1211,7 +1706,7 @@ class ResNet50_sparse2(tf.Module):
         self.stage4 = ResNet50_sparse2.ResNetStack(512, 256, 6, stride1=2, sparsity=sparsity, name="conv4")
         self.stage5 = ResNet50_sparse2.ResNetStack(1024, 512, 3, stride1=2, sparsity=sparsity, name="conv5")
 
-        self.fc_w = funzioni.SparseTensor([2048, num_classes],0 ,name="fc_wmio")
+        self.fc_w = SparseTensor([2048, num_classes],0 ,name="fc_wmio")
         #self.fc_w = funzioni.SparseTensor([2048, num_classes], sparsity, name="fc_w_M")
         self.fc_b = tf.Variable(tf.zeros([num_classes]), name="fc_b")
 
@@ -1230,14 +1725,136 @@ class ResNet50_sparse2(tf.Module):
 
         logits = conv.matmul(x, self.fc_w) + self.fc_b
         return tf.nn.softmax(logits)
-'''
+#v2 (con flag e ricalcolo tutti layer)
+class ResNet50_sparse2(tf.Module):
+    class ConvBlock(tf.Module):
+        def __init__(self, sparsity, in_channels, filters, stride=1, conv_shortcut=True, recompute=False, name=None):
+            super().__init__(name=name)
+            self.stride = stride
+            self.conv_shortcut = conv_shortcut
+            self.recompute = recompute
 
+            self.w1 = SparseTensor(v4.create_tensor_row_major(1, in_channels, filters),name="w1mio")
+            #self.w1 = SparseTensor([1, 1, in_channels, filters], sparsity, name="w1_M")
+            self.b1 = tf.Variable(tf.zeros([filters]), name="b1")
+            self.bn1 = tf.keras.layers.BatchNormalization(name="bn1")
+
+            self.w2 = SparseTensor(v4.create_tensor_row_major(3, filters, filters),name="w2mio")
+            #self.w2 = SparseTensor([3, 3, filters, filters], sparsity, name="w2_M")
+            self.b2 = tf.Variable(tf.zeros([filters]), name="b2")
+            self.bn2 = tf.keras.layers.BatchNormalization(name="bn2")
+
+            self.w3 = SparseTensor(v4.create_tensor_row_major(1, filters, 4*filters),name="w3mio")
+            #self.w3 = SparseTensor([1, 1, filters, 4 * filters], sparsity, name="w3_M")
+            self.b3 = tf.Variable(tf.zeros([4 * filters]), name="b3")
+            self.bn3 = tf.keras.layers.BatchNormalization(name="bn3")
+
+            if conv_shortcut:
+                self.w_sc = SparseTensor(v4.create_tensor_row_major(1, in_channels, 4 * filters), name="w_scmio")
+                #self.w_sc = SparseTensor([1, 1, in_channels, 4 * filters], sparsity, name="w_sc_M")
+                self.b_sc = tf.Variable(tf.zeros([4 * filters]), name="b_sc")
+                self.bn_sc = tf.keras.layers.BatchNormalization(name="bn_sc")
+
+        def __call__(self, x, training=False):
+            def forward(x):
+                shortcut = x
+                if self.conv_shortcut:
+                    shortcut = conv.sparse_to_dense_conv2d(x, self.w_sc, stride=self.stride, padding="SAME") + self.b_sc
+                    shortcut = self.bn_sc(shortcut, training=training)
+
+                x = conv.sparse_to_dense_conv2d(x, self.w1, stride=self.stride, padding="SAME") + self.b1
+                x = self.bn1(x, training=training)
+                x = tf.nn.relu(x)
+
+                x = conv.sparse_to_dense_conv2d(x, self.w2, stride=1, padding="SAME") + self.b2
+                x = self.bn2(x, training=training)
+                x = tf.nn.relu(x)
+
+                x = conv.sparse_to_dense_conv2d(x, self.w3, stride=1, padding="SAME") + self.b3
+                x = self.bn3(x, training=training)
+
+                x = tf.nn.relu(x + shortcut)
+                return x
+
+            if self.recompute:
+                forward = tf.recompute_grad(forward)
+
+            return forward(x)
+
+    class ResNetStack(tf.Module):
+        def __init__(self, in_channels, filters, blocks, stride1, sparsity, recompute=False, name=None):
+            super().__init__(name=name)
+            self.blocks = []
+
+            self.blocks.append(
+                ResNet50_sparse2.ConvBlock(sparsity, in_channels, filters, stride=stride1, conv_shortcut=True, recompute=recompute, name="block1")
+            )
+            for i in range(2, blocks + 1):
+                self.blocks.append(
+                    ResNet50_sparse2.ConvBlock(sparsity, 4 * filters, filters, stride=1, conv_shortcut=False, recompute=recompute, name=f"block{i}")
+                )
+
+        def __call__(self, x, training=False):
+            for block in self.blocks:
+                x = block(x, training=training)
+            return x
+
+    def __init__(self, sparsity, num_classes=8, recompute=False, name=None):
+        super().__init__(name=name)
+        self.num_classes = num_classes
+        self.recompute = recompute
+
+        self.conv1_w = SparseTensor(v4.create_tensor_row_major(7, 3, 64), name="conv1_wmio")
+        #self.conv1_w = SparseTensor([7, 7, 3, 64], sparsity, name="conv1_w_M")
+        self.conv1_b = tf.Variable(tf.zeros([64]), name="conv1_b")
+        self.bn1 = tf.keras.layers.BatchNormalization(name="conv1_bn")
+
+        self.pool = lambda x: tf.nn.max_pool2d(x, ksize=3, strides=2, padding="SAME")
+
+        self.stage2 = ResNet50_sparse2.ResNetStack(64, 64, 3, stride1=1, sparsity=sparsity, recompute=recompute, name="conv2")
+        self.stage3 = ResNet50_sparse2.ResNetStack(256, 128, 4, stride1=2, sparsity=sparsity, recompute=recompute, name="conv3")
+        self.stage4 = ResNet50_sparse2.ResNetStack(512, 256, 6, stride1=2, sparsity=sparsity, recompute=recompute, name="conv4")
+        self.stage5 = ResNet50_sparse2.ResNetStack(1024, 512, 3, stride1=2, sparsity=sparsity, recompute=recompute, name="conv5")
+
+        self.fc_w = SparseTensor([2048, num_classes],0 ,name="fc_wmio")
+        #self.fc_w = SparseTensor([2048, num_classes], sparsity, name="fc_w_M")
+        self.fc_b = tf.Variable(tf.zeros([num_classes]), name="fc_b")
+
+    def __call__(self, x, training=False):
+        def stem(x):
+            x = conv.sparse_to_dense_conv2d(x, self.conv1_w, stride=2, padding="SAME") + self.conv1_b
+            x = self.bn1(x, training=training)
+            x = tf.nn.relu(x)
+            x = self.pool(x)
+            return x
+
+        def head(x):
+            x = tf.reduce_mean(x, axis=[1, 2])  # Global Average Pooling
+            logits = conv.matmul(x, self.fc_w) + self.fc_b
+            return tf.nn.softmax(logits)
+
+        if self.recompute:
+            x = tf.recompute_grad(stem)(x)
+        else:
+            x = stem(x)
+
+        x = self.stage2(x, training=training)
+        x = self.stage3(x, training=training)
+        x = self.stage4(x, training=training)
+        x = self.stage5(x, training=training)
+
+        if self.recompute:
+            return tf.recompute_grad(head)(x)
+        else:
+            return head(x)
+'''
 
 #TODO: x = tf.nn.conv2d(x, self.w1, strides=..., padding=...) + self.b1 vs x = tf.nn.bias_add(tf.nn.conv2d(x, self.w1, strides=..., padding=...), self.b1)
 #TODO: dropput
 #TODO: SparseCategoricalCrossentropy(from_logits=True) cos'è?
 #TODO: You're recreating BatchNormalization layers directly in the block constructors — that's fine, but remember: They must be reused correctly during training and inference. You're doing this right — just keep this in mind when saving/loading
-#ResNet50_original ResNet50_keras sono versioni base non checkpointed e non sparse
+# resnet original
+'''
 class ResNet50_original(tf.Module):
     class ConvBlock(tf.Module):
         def __init__(self, in_channels, filters, stride=1, conv_shortcut=True, name=None):
@@ -1340,7 +1957,8 @@ class ResNet50_original(tf.Module):
 
         logits = tf.matmul(x, self.fc_w) + self.fc_b
         return tf.nn.softmax(logits)
-
+'''
+# resnet Keras original
 '''
 def ResNet50_keras(input_shape=(224, 224, 3), num_classes=1000):
     def resnet_stack(x, filters, blocks, stride1):
@@ -1481,34 +2099,15 @@ def ResNet50_keras_check(input_shape=(224, 224, 3), num_classes=1000):
 '''
 
 def main():
-    #X_train, y_train = funzioni.load_bloodmnist_subset(); X_val = X_train; y_val = y_train
-    (X_train, y_train), (X_test, y_test), (X_val, y_val) = funzioni.load_bloodmnist_224()
+    X_train, y_train = funzioni.load_bloodmnist_subset(); X_val = X_train; y_val = y_train
+    #(X_train, y_train), (X_test, y_test), (X_val, y_val) = funzioni.load_bloodmnist_224()
 
-    #model = ResNet50_sparse(sparsity= 0, num_classes=8)
-    #model = ResNet50_2( num_classes=8)
-    #model = ResNet50_original(num_classes=8)
-    #model = ResNet50_sparse2_check(sparsity= 0.99, num_classes=8)
-    model = ResNet50_sparse2(sparsity= 0.8)
-    #model = ResNet50_keras(num_classes=8)
-    #model = ResNet50_keras_check(num_classes=8)
+    model = ResNet50_sparse2(sparsity= 0.8, num_classes=8, recompute = True)
+    #model = ResNet50_2(num_classes=8)
 
-    '''sp = tf.io.parse_tensor(tf.io.read_file('sp.bytes'), out_type=tf.float32)
-    de = tf.io.parse_tensor(tf.io.read_file('de.bytes'), out_type=tf.float32)
-    print(tf.reduce_max(tf.abs(sp - de)))
-    exit()'''
-
-
-    #t = model.trainable_variables
-    #trainable_count = sum(tf.size(v).numpy() for v in model.trainable_variables)
-    #print("Total number of trainable scalars:", trainable_count)
-    #for var in model.trainable_variables:
-    #print(var.name)
-
-    schedule = [100,]
     max_iter = 13000
-    max_iter = 4000
     rho0 = 0.5
-    prune_and_regrow_stride  = 1000
+    prune_and_regrow_stride  = 2
     funzioni.train(model,
                    X_train,
                    y_train,
@@ -1516,7 +2115,7 @@ def main():
                    y_val,
                    epochs=100,
                    max_iter = max_iter,
-                   batch_size=5,
+                   batch_size=32,
                    lr=0.001,
                    live_plotting=False,
                    weights_chekpoint_stride=300,
@@ -1527,4 +2126,4 @@ if __name__ == '__main__':
     main()
 
 
-#ciao
+#TODO:             tensor.rowmajor_reorder()

@@ -190,7 +190,7 @@ class Varie(unittest.TestCase):
 
         for shape in test_shapes:
             # Run the original test logic for each shape
-            indices, nnz = v4.random_sparse_indices3(shape, density)
+            indices, nnz = models.SparseTensor.random_sparse_indices3(shape, density)
             indices_np = indices.numpy()
 
             flat = np.ravel_multi_index(indices_np.T, shape, order='C')
@@ -1242,15 +1242,6 @@ class Prune_and_Regrow(unittest.TestCase):
         self.assertEqual(model.num_inactive_weights(),384-151-147-1)
 
         print(model.regrow_summary())
-
-
-
-
-
-
-
-
-
 
 if __name__ == '__main__':
     unittest.main()
