@@ -244,8 +244,8 @@ def train(model, X, y, epochs, batch_size, lr, prune_and_regrow_step, patience=2
 '''
 
 
-
-
+#versione prima di microbatchin
+'''
 def train(
     model,
     X_tr,
@@ -328,8 +328,9 @@ def train(
             ckpt.step.assign(it)
 
             # Print progress
+            #print(f"Epoch: {epoch}, lr:{optimizer.learning_rate.numpy()} Step {it}, Loss: {loss.numpy()}")
             print(f"Step {it}, Loss: {loss.numpy()}")
-            #print(utils.mem_usage())
+            print(utils.mem_usage())
 
             # Live plotting
             if live_plotting and (it % plot_every == 0):
@@ -377,12 +378,6 @@ def train(
 
         print(f"Patience counter: {patience_counter}")
 
-
-        '''print("Prune & Regrow")
-        # print(model)
-        model.prune_and_regrow(rho0**epoch+1, optimizer)
-        optimizer = tf.keras.optimizers.Adam(learning_rate=float(optimizer.learning_rate.numpy()))'''
-
     # Final plot
     if live_plotting:
         clear_output(wait=True)
@@ -390,7 +385,158 @@ def train(
         plt.title('Final Training Loss')
         plt.legend()
         plt.show()
+'''
 
+
+
+def train(
+    model,
+    X_tr,
+    y_tr,
+    X_val,
+    y_val,
+    epochs,
+    max_iter,
+    batch_size,
+    lr,
+    prune_and_regrow_stride,
+    patience=3,
+    plot_every=1,
+    live_plotting=True,
+    weights_chekpoint_stride=3,
+    rho0=0.5,
+    microbatch_size=None  # New argument
+):
+
+    SEED = 0
+    tf.random.set_seed(SEED)
+    np.random.seed(SEED)
+    random.seed(SEED)
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
+    loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
+    dataset = tf.data.Dataset.from_tensor_slices((X_tr, y_tr)).batch(batch_size)
+
+    checkpoint_dir = './checkpoints'
+    ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=optimizer, model=model)
+    manager = tf.train.CheckpointManager(ckpt, checkpoint_dir, max_to_keep=1)
+    ckpt.restore(manager.latest_checkpoint)
+    if manager.latest_checkpoint:
+        print(f"Restored from {manager.latest_checkpoint}")
+    else:
+        print("Training from scratch")
+    it = int(ckpt.step.numpy())
+
+    best_loss = float('inf')
+    patience_counter = 0
+    step_losses = []
+    step_numbers = []
+
+    if live_plotting:
+        plt.figure(figsize=(10, 6))
+        plt.xlabel('Training Step')
+        plt.ylabel('Loss')
+        plt.title('Live Training Loss')
+        plt.grid(True)
+
+    for epoch in range(epochs):
+        print(f"\nEpoch {epoch + 1}")
+        epoch_loss = 0
+        num_batches = 0
+
+        for step, (x_batch, y_batch) in enumerate(dataset):
+            if microbatch_size is None:
+                # Standard full-batch training
+                with tf.GradientTape() as tape:
+                    logits = model(x_batch, training=True)
+                    loss = loss_fn(y_batch, logits)
+                grads = tape.gradient(loss, model.trainable_variables)
+                optimizer.apply_gradients(zip(grads, model.trainable_variables))
+                loss_val = loss.numpy()
+
+            else:
+                # Microbatching with gradient accumulation
+                microbatches = tf.data.Dataset.from_tensor_slices((x_batch, y_batch)).batch(microbatch_size)
+                accum_grads = [tf.zeros_like(var) for var in model.trainable_variables]
+                total_loss = 0.0
+                num_microbatches = 0
+
+                for x_micro, y_micro in microbatches:
+                    with tf.GradientTape() as tape:
+                        logits = model(x_micro, training=True)
+                        loss = loss_fn(y_micro, logits)
+                    grads = tape.gradient(loss, model.trainable_variables)
+                    accum_grads = [acc_g + g for acc_g, g in zip(accum_grads, grads)]
+                    total_loss += loss.numpy()
+                    num_microbatches += 1
+
+                avg_grads = [g / num_microbatches for g in accum_grads]
+                optimizer.apply_gradients(zip(avg_grads, model.trainable_variables))
+                loss_val = total_loss / num_microbatches
+
+            epoch_loss += loss_val
+            step_losses.append(loss_val)
+            step_numbers.append(it)
+            num_batches += 1
+
+            it += 1
+            ckpt.step.assign(it)
+
+            print(f"Step {it}, Loss: {loss_val}")
+            try:
+                import utils
+                print(utils.mem_usage())
+            except:
+                pass  # optional if utils.mem_usage isn't available
+
+            if live_plotting and (it % plot_every == 0):
+                try:
+                    clear_output(wait=True)
+                except:
+                    plt.clf()
+                plt.plot(step_numbers, step_losses, 'b-', label='Training Loss')
+                plt.legend()
+                plt.draw()
+                plt.pause(0.01)
+
+            if it % weights_chekpoint_stride == 0:
+                acc_tr = test2(model, X_tr, y_tr)
+                acc_val = test2(model, X_val, y_val)
+                print(f"Step {it}, Accuracy Train: {acc_tr:.3f},  Accuracy Val: {acc_val:.3f}")
+                save_path = manager.save()
+                print(f"Checkpoint saved: {save_path}")
+
+            if it % prune_and_regrow_stride == 0:
+                print("Prune & Regrow")
+                model.prune_and_regrow(rho0 ** (int(it / prune_and_regrow_stride)), optimizer)
+                optimizer = tf.keras.optimizers.Adam(learning_rate=float(optimizer.learning_rate.numpy()))
+
+            if it == max_iter:
+                print("max iter reached")
+                return
+
+        avg_epoch_loss = epoch_loss / num_batches
+        print(f"Epoch {epoch + 1} Avg Loss: {avg_epoch_loss}")
+
+        if avg_epoch_loss < best_loss:
+            best_loss = avg_epoch_loss
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                new_lr = optimizer.learning_rate.numpy() * 0.5
+                optimizer.learning_rate.assign(new_lr)
+                print(f"Reducing LR to {new_lr:.6f}")
+                patience_counter = 0
+
+        print(f"Patience counter: {patience_counter}")
+
+    if live_plotting:
+        clear_output(wait=True)
+        plt.plot(step_numbers, step_losses, 'b-', label='Training Loss')
+        plt.title('Final Training Loss')
+        plt.legend()
+        plt.show()
 
 
 
