@@ -946,12 +946,15 @@ def classic_conv2d_4(input, filters_sparse, stride=1, padding='SAME'):
 
     return tf.nn.conv2d(input,dense_filter,stride,padding)'''
 def sparse_to_dense_conv2d(input, sp_filter, stride=1, padding='SAME'):
+    #TODO: fare piu efficiente?
     dense_filter = tf.sparse.to_dense(sp_filter.to_tf_sparse())
-
-
-
     return tf.nn.conv2d(input,dense_filter,stride,padding)
 
+def sparse_to_dense_depthwise_conv2d(input, sp_filter, strides, padding='SAME'):
+    dense_filter = tf.sparse.to_dense(sp_filter.to_tf_sparse())
+    return tf.nn.depthwise_conv2d(input,dense_filter,strides,padding)
+
+#TODO: sparse_to_dense_matmul
 def matmul(X,Y_sp):
     Y_dense = sparse_to_dense(Y_sp.indices, Y_sp.shape,Y_sp.values,
                         default_value=0,

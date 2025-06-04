@@ -329,3 +329,51 @@ batch = 32
 (7963.1875, 10810.078125, 8531.21484375, 10842.0859375) no check  sp = 0.8 (10 step)
 (8235.8125, 11606.19921875, 9212.96875, 11638.35546875) no check, sp = 0 (24 steps)
 
+
+
+
+
+
+
+C:\Users\Xino\PycharmProjects\HDA\.venv\Scripts\python.exe C:\Users\Xino\PycharmProjects\HDA\models.py
+2025-06-03 08:25:39.071873: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2025-06-03 08:25:40.888147: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2025-06-03 08:25:44.622631: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: SSE3 SSE4.1 SSE4.2 AVX AVX2 AVX_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+Loaded subset: (1195, 224, 224, 3), (1195, 8)
+Training from scratch
+
+Epoch 1
+Step 2, Loss: 2.079441547393799
+Step 3, Loss: 2.189054012298584
+Step 4, Loss: 2.1762876510620117
+Step 5, Loss: 2.669844627380371
+Step 6, Loss: 1.8165137767791748
+Step 7, Loss: 2.3282341957092285
+Step 8, Loss: 1.9997813701629639
+Step 9, Loss: 2.103971481323242
+Step 10, Loss: 1.9409513473510742
+Step 11, Loss: 1.9501467943191528
+Step 12, Loss: 1.9471850395202637
+Step 13, Loss: 2.007359504699707
+Step 14, Loss: 1.8740845918655396
+Step 15, Loss: 2.3448736667633057
+Step 16, Loss: 2.121858835220337
+Step 17, Loss: 1.9928216934204102
+Step 18, Loss: 1.967025876045227
+Step 19, Loss: 2.635105609893799
+Step 20, Loss: 2.221766471862793
+Step 21, Loss: 2.073448657989502
+Step 22, Loss: 2.262620449066162
+Step 23, Loss: 1.970413088798523
+Step 24, Loss: 1.9626911878585815
+Step 25, Loss: 2.3942952156066895
+Step 26, Loss: 2.151484489440918
+Step 27, Loss: 2.038832664489746
+Step 28, Loss: 1.9878263473510742
+Step 29, Loss: 1.8645930290222168
+Step 30, Loss: 1.9358429908752441
+Step 31, Loss: 2.4518327713012695
+
+
+

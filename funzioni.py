@@ -7,6 +7,11 @@ from tensorflow.keras.utils import to_categorical
 #from google.colab import drive
 import os
 import matplotlib.pyplot as plt
+import numpy as np
+import tensorflow as tf
+import random
+import matplotlib.pyplot as plt
+from IPython.display import clear_output  # Works in Jupyter; ignored in scripts
 
 '''if not os.path.ismount('/content/drive'):
     drive.mount('/content/drive')
@@ -239,11 +244,7 @@ def train(model, X, y, epochs, batch_size, lr, prune_and_regrow_step, patience=2
 '''
 
 
-import numpy as np
-import tensorflow as tf
-import random
-import matplotlib.pyplot as plt
-from IPython.display import clear_output  # Works in Jupyter; ignored in scripts
+
 
 def train(
     model,
@@ -256,7 +257,7 @@ def train(
     batch_size,
     lr,
     prune_and_regrow_stride,
-    patience=2,
+    patience=3,
     plot_every=1,
     live_plotting=True,
     weights_chekpoint_stride = 3,
@@ -273,8 +274,8 @@ def train(
     loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
     dataset = tf.data.Dataset.from_tensor_slices((X_tr, y_tr)).batch(batch_size)
 
-    # checkpoint_dir = './checkpoints'
-    checkpoint_dir = '/content/drive/MyDrive/hda/checkpoints'
+    checkpoint_dir = './checkpoints'
+    #checkpoint_dir = '/content/drive/MyDrive/hda/checkpoints'
     ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=optimizer, model=model)
     manager = tf.train.CheckpointManager(ckpt, checkpoint_dir, max_to_keep=1)
     ckpt.restore(manager.latest_checkpoint)
@@ -328,7 +329,7 @@ def train(
 
             # Print progress
             print(f"Step {it}, Loss: {loss.numpy()}")
-            print(utils.mem_usage())
+            #print(utils.mem_usage())
 
             # Live plotting
             if live_plotting and (it % plot_every == 0):
@@ -345,20 +346,22 @@ def train(
             if it % weights_chekpoint_stride == 0:
                 acc_tr = test2(model, X_tr, y_tr)
                 acc_val = test2(model, X_val, y_val)
+                #acc_val = -1
+                #acc_tr = -1
                 print(f"Step {it}, Accuracy Train: {acc_tr:.3f},  Accuracy Val: {acc_val:.3f}")
-                #save_path = manager.save()
-                #print(f"Checkpoint saved: {save_path}")
+                save_path = manager.save()
+                print(f"Checkpoint saved: {save_path}")
 
             if it % prune_and_regrow_stride == 0:
                 print("Prune & Regrow")
                 #model.prune_and_regrow(0.5, optimizer)
                 model.prune_and_regrow(rho0 ** (int(it/prune_and_regrow_stride)), optimizer)
+                #TODO: inizializzare le nuove variabili con vecchi momenti?
                 optimizer = tf.keras.optimizers.Adam(learning_rate=float(optimizer.learning_rate.numpy()))
 
         # Epoch summary
         avg_epoch_loss = epoch_loss / num_batches
-        print(f"Epoch {epoch + 1} Avg Loss: {avg_epoch_loss:.4f}")
-        print(f"Patience counter: {patience_counter}")
+        print(f"Epoch {epoch + 1} Avg Loss: {avg_epoch_loss}")
 
         # Early learning rate adjustment
         if avg_epoch_loss < best_loss:
@@ -371,6 +374,9 @@ def train(
                 optimizer.learning_rate.assign(new_lr)
                 print(f"Reducing LR to {new_lr:.6f}")
                 patience_counter = 0
+
+        print(f"Patience counter: {patience_counter}")
+
 
         '''print("Prune & Regrow")
         # print(model)

@@ -1,3 +1,7 @@
+folder_path = '/content/drive/MyDrive/hda'
+import sys
+sys.path.append(folder_path)
+
 import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '1'
 
@@ -9,22 +13,27 @@ import numpy as np
 import v4
 import conv
 import utils
-
 from tensorflow.keras import layers, models
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras import optimizers
 from tensorflow.keras.losses import CategoricalCrossentropy
+from keras.layers import Input, Conv2D, DepthwiseConv2D, BatchNormalization, ReLU, GlobalAveragePooling2D, Dropout, Dense
+from keras.models import Model
+from tensorflow.keras.layers import BatchNormalization, GlobalAveragePooling2D
+
 import gc
 #tf.keras.backend.set_floatx('float16')
 
-folder_path = '/content/drive/MyDrive/hda'
-import sys
-sys.path.append(folder_path)
+
 
 SEED = 0
 tf.random.set_seed(SEED)
 np.random.seed(SEED)
 random.seed(SEED)
+
+#TODO: torch.no_grad()
+#TODO: tf.config.experimental.reset_memory_stats(gpus[0])
+
 
 class SparseTensor(tf.Module):
     # shape generico row major
@@ -131,24 +140,24 @@ class SparseTensor(tf.Module):
         values_sorted = tf.gather(self.values, idx_sorted)
         indices_sorted = tf.gather(self.indices, idx_sorted)
 
-        '''num_values = tf.shape(values_sorted)[0]
-        num_values_f = tf.cast(num_values, tf.float32)
-        split_f = tf.math.ceil(num_values_f * tf.constant(rho, dtype=tf.float32))
-        split_idx = tf.cast(split_f, tf.int32)'''
         split_idx = tf.cast(tf.math.ceil(tf.cast(tf.shape(values_sorted)[0], tf.float32) * rho), tf.int32)
+
+        if split_idx==0:
+            return 0
 
         #ATTENZIONE: gli indici potrebbero essere disordinati
         new_indices = indices_sorted[split_idx:]
         new_values = values_sorted[split_idx:]
 
         self.indices = new_indices
+        #TODO: name
         self.values = tf.Variable(new_values, name="pruned_values", trainable=True)
 
         num_pruned = split_idx.numpy()
         self.num_pruned = self.num_pruned + num_pruned
         return num_pruned
 
-    def regrow_old(self, requested_growth):
+    def regrow_original(self, requested_growth):
         # Generate all possible indices
         shape = self.shape
         all_coords = tf.stack(tf.meshgrid(*[tf.range(s) for s in shape], indexing='ij'), axis=-1)
@@ -208,19 +217,58 @@ class SparseTensor(tf.Module):
 
             # Update indices and values
             self.indices = tf.concat([self.indices, new_indices], axis=0)
+
+            #TODO: cambia name
             self.values = tf.Variable(
                 tf.concat([self.values, new_values], axis=0),
                 name="regrown_values",
                 trainable=True
             )
 
-            self.rowmajor_reorder()
             # Convert to numpy only once at the end
             actual_regrow_np = actual_regrow.numpy()
             self.num_regrown = self.num_regrown + actual_regrow_np
-            return actual_regrow_np
         else:
+            actual_regrow_np = 0
+
+        self.rowmajor_reorder()
+        return actual_regrow_np
+
+    def regrow_cl(self, requested_growth):
+        if requested_growth == 0:
             return 0
+
+        existing_set = set(map(tuple, self.indices.numpy()))
+        shape_np = self.shape.numpy()
+        total_elements = np.prod(shape_np)
+
+        # Use numpy's random choice without replacement on a large range
+        max_samples = min(total_elements, requested_growth * 5)  # Sample more than needed
+        flat_indices = np.random.choice(total_elements, size=max_samples, replace=False)
+
+        new_coords = []
+        for flat_idx in flat_indices:
+            coord = np.unravel_index(flat_idx, shape_np)
+            if coord not in existing_set:
+                new_coords.append(coord)
+                if len(new_coords) >= requested_growth:
+                    break
+
+        if new_coords:
+            new_indices_tf = tf.constant(new_coords, dtype=tf.int64)
+            new_values = tf.zeros([len(new_coords)], dtype=self.values.dtype)
+
+            self.indices = tf.concat([self.indices, new_indices_tf], axis=0)
+            self.values = tf.Variable(
+                tf.concat([self.values, new_values], axis=0),
+                name="regrown_values", trainable=True
+            )
+
+            self.rowmajor_reorder()
+            self.num_regrown += len(new_coords)
+            return len(new_coords)
+
+        return 0
 
     def reset_prune_and_regrow_stats(self):
         self.num_regrown = 0
@@ -346,7 +394,7 @@ class ResNet50_sparse2(tf.Module):
         return tf.nn.softmax(logits)
 '''
 
-#versione seria sparsa senza check
+#resnet sparso base
 '''
 class ResNet50_sparse2(tf.Module):
     class ConvBlock(tf.Module):
@@ -572,7 +620,6 @@ class ResNet50_sparse2(tf.Module):
 
                 x = block(x, training=training)
             return x
-
     def __init__(self, sparsity, num_classes=8, name=None):
         super().__init__(name=name)
         self.num_classes = num_classes
@@ -599,7 +646,6 @@ class ResNet50_sparse2(tf.Module):
         self.fc_b = tf.Variable(tf.zeros([num_classes]), name="fc_b")
 
         self.sparse_tensors = self.get_sparse_tensors()
-
     def __call__(self, x, training=False):
         #tf.io.write_file('sp.bytes', tf.io.serialize_tensor(x))
         #exit()
@@ -1007,7 +1053,7 @@ class ResNet50_sparse2(tf.Module):
             super().__init__(name=name)
             self.stride = stride
             self.conv_shortcut = conv_shortcut
-            self.recompute = recompute
+            self.recompute = recompute #recompute grad
 
             self.w1 = SparseTensor([1, 1, in_channels, filters], sparsity, name="w1_M")
             self.b1 = tf.Variable(tf.zeros([filters]), name="b1")
@@ -1090,7 +1136,6 @@ class ResNet50_sparse2(tf.Module):
         self.fc_b = tf.Variable(tf.zeros([num_classes]), name="fc_b")
 
         self.sparse_tensors = self.get_sparse_tensors()
-
 
     def __call__(self, x, training=False):
         def stem(x):
@@ -1198,8 +1243,8 @@ class ResNet50_sparse2(tf.Module):
             sparse_tensor.mean_momentum = tf.reduce_mean(tf.abs(momentum_tensor))
 
     def regrow(self, to_regrow):
-        # se vuoi capire perchè esiste regrowth_residual pensa al caso in cui to_regrow = 1
 
+        # se vuoi capire perchè esiste regrowth_residual pensa al caso in cui to_regrow = 1
         if to_regrow > self.num_inactive_weights():
             raise ValueError(
                 f"Cannot regrow {to_regrow} elements. "
@@ -1239,9 +1284,9 @@ class ResNet50_sparse2(tf.Module):
         self.update_mean_momentums(optimizer)
         self.reset_prune_and_regrow_stats()
         num_pruned = self.prune(rho)
-        #print(self.prune_summary())
+        print(self.prune_summary())
         self.regrow(num_pruned)
-        #print(self.regrow_summary())
+        print(self.regrow_summary())
 
     def reset_prune_and_regrow_stats(self):
         for t in self.sparse_tensors:
@@ -1383,6 +1428,10 @@ class ResNet50_sparse2(tf.Module):
 
 
 
+
+
+
+#test
 '''
 #ResNet50_sparse & ResNet50_2(non sparse) ResNet50_sparse2(checkpointed v1/v2) devono dare gli stessi risultati -- servono solo per il debug -- ricorda di disabilitare oneNN custom ops
 class ResNet50_sparse(tf.Module):
@@ -2021,93 +2070,601 @@ def ResNet50_keras(input_shape=(224, 224, 3), num_classes=1000):
     outputs = layers.Dense(num_classes, activation="softmax")(x)
 
     return models.Model(inputs, outputs)
-
-
-# ConvBlockWithCheckpoint & ResNet50_keras_check sono insieme
-class ConvBlockWithCheckpoint(tf.keras.layers.Layer):
-    def __init__(self, filters, stride, shortcut_conv):
-        super().__init__()
-        self.filters = filters
-        self.stride = stride
-        self.shortcut_conv = shortcut_conv
-
-        # Predefine the layers
-        if self.shortcut_conv:
-            self.shortcut_layer = layers.Conv2D(4 * filters, 1, strides=stride)
-            self.shortcut_bn = layers.BatchNormalization()
-        else:
-            self.shortcut_layer = None
-
-        self.conv1 = layers.Conv2D(filters, 1, strides=stride)
-        self.bn1 = layers.BatchNormalization()
-
-        self.conv2 = layers.Conv2D(filters, 3, padding="same")
-        self.bn2 = layers.BatchNormalization()
-
-        self.conv3 = layers.Conv2D(4 * filters, 1)
-        self.bn3 = layers.BatchNormalization()
-
-        self.relu = layers.ReLU()
-        self.add = layers.Add()
-
-    def call(self, inputs, training=False):
-        @tf.recompute_grad
-        def _forward(x):
-            shortcut = x
-            if self.shortcut_conv:
-                shortcut = self.shortcut_layer(shortcut)
-                shortcut = self.shortcut_bn(shortcut, training=training)
-
-            x = self.conv1(x)
-            x = self.bn1(x, training=training)
-            x = self.relu(x)
-
-            x = self.conv2(x)
-            x = self.bn2(x, training=training)
-            x = self.relu(x)
-
-            x = self.conv3(x)
-            x = self.bn3(x, training=training)
-
-            x = self.add([x, shortcut])
-            x = self.relu(x)
-            return x
-
-        return _forward(inputs)
-def ResNet50_keras_check(input_shape=(224, 224, 3), num_classes=1000):
-    def resnet_stack(x, filters, blocks, stride1):
-        x = ConvBlockWithCheckpoint(filters, stride1, shortcut_conv=True)(x)
-        for _ in range(1, blocks):
-            x = ConvBlockWithCheckpoint(filters, stride=1, shortcut_conv=False)(x)
-        return x
-
-    inputs = tf.keras.Input(shape=input_shape)
-    x = layers.Conv2D(64, 7, strides=2, padding="same")(inputs)
-    x = layers.BatchNormalization()(x)
-    x = layers.ReLU()(x)
-    x = layers.MaxPooling2D(pool_size=3, strides=2, padding="same")(x)
-
-    x = resnet_stack(x, 64, 3, stride1=1)
-    x = resnet_stack(x, 128, 4, stride1=2)
-    x = resnet_stack(x, 256, 6, stride1=2)
-    x = resnet_stack(x, 512, 3, stride1=2)
-
-    x = layers.GlobalAveragePooling2D()(x)
-    outputs = layers.Dense(num_classes, activation="softmax")(x)
-
-    return models.Model(inputs, outputs)
 '''
 
+# mobile net base
+'''
+def MobileNet_keras(input_shape=(224, 224, 3), alpha=1.0, depth_multiplier=1, dropout=1e-3, classes=8):
+    def _conv_block(inputs, filters, alpha, kernel=(3, 3), strides=(1, 1)):
+        filters = int(filters * alpha)
+        #filters: output_ch
+        x = Conv2D(filters, kernel, padding="same", use_bias=False, strides=strides)(inputs)
+        x = BatchNormalization()(x)
+        return ReLU(6.)(x)
+
+    # H x W x C_in -> H1 x W1 x pointwise_filters
+    # praticamente è Conv2D(pointwise_filters,strides, padding = "SAME")
+    def _depthwise_conv_block(inputs, pointwise_filters, alpha, depth_multiplier=1, strides=(1, 1)):
+        pointwise_filters = int(pointwise_filters * alpha)
+        # HxWxC_in -> H1xH2xC_in
+        x = DepthwiseConv2D((3, 3), padding="same", depth_multiplier=depth_multiplier,
+                            strides=strides, use_bias=False)(inputs)
+        x = BatchNormalization()(x)
+        x = ReLU(6.)(x)
+        # H1 x H2 x C_in -> H1 x H2 x pointwise_filters
+        x = Conv2D(pointwise_filters, (1, 1), padding="same", use_bias=False)(x)
+        x = BatchNormalization()(x)
+        return ReLU(6.)(x)
+
+    img_input = Input(shape=input_shape)
+
+    # 224x224x3 -> 112x112x32
+    x = _conv_block(img_input, 32, alpha, strides=(2, 2))
+
+    # pointwise_filters: out_chan
+    # se strides = (1,1) significa che non riduco H,W
+
+    # 112x112x32 -> 112x112x64 (rosa)
+    x = _depthwise_conv_block(x, 64, alpha, depth_multiplier)
+
+    # 112x112x64 -> 56x56x128 (blu)
+    x = _depthwise_conv_block(x, 128, alpha, depth_multiplier, strides=(2, 2))
+
+    # 56x56x128 -> 56x56x128 (arancione)
+    x = _depthwise_conv_block(x, 128, alpha, depth_multiplier)
+
+    # 56x56x128 -> 28x28x256 (viola)
+    x = _depthwise_conv_block(x, 256, alpha, depth_multiplier, strides=(2, 2))
+
+    # 28x28x256 -> 28x28x256 (verde)
+    x = _depthwise_conv_block(x, 256, alpha, depth_multiplier)
+
+    # 28x28x256 -> 14x14x512 (azzurro)
+    x = _depthwise_conv_block(x, 512, alpha, depth_multiplier, strides=(2, 2))
+
+    for _ in range(5):
+        # 14x14x512 -> 14x14x512
+        x = _depthwise_conv_block(x, 512, alpha, depth_multiplier)
+
+    # 14x14x512 -> 7x7x1024
+    x = _depthwise_conv_block(x, 1024, alpha, depth_multiplier, strides=(2, 2))
+
+    # 7x7x1024 -> 7x7x1024
+    x = _depthwise_conv_block(x, 1024, alpha, depth_multiplier)
+
+    x = GlobalAveragePooling2D()(x)
+    #x = Dropout(dropout)(x)
+
+    x = Dense(classes, activation="softmax")(x)
+
+    return Model(img_input, x)
+class MobileNetTF(tf.Module):
+    class ConvBlock(tf.Module):
+        def __init__(self, in_channels, out_channels, stride, name=None):
+            super().__init__(name=name)
+            self.stride = stride
+            # self.kernel_size = kernel_size
+            self.conv_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(3, 3, in_channels, out_channels)),
+                                            name="conv")
+
+            self.bn = BatchNormalization()
+
+        def __call__(self, x, training=False):
+            x = tf.nn.conv2d(x, self.conv_weights, strides=self.stride, padding="SAME")
+            x = self.bn(x, training=training)
+            return tf.nn.relu6(x)
+
+    class DepthwiseConvBlock(tf.Module):
+        def __init__(self, in_channels, out_channels, stride, name=None):
+            super().__init__(name=name)
+            self.strides = [1, stride, stride, 1]
+
+            self.dw_weights = tf.Variable(
+                tf.initializers.GlorotUniform()(
+                    shape=(3, 3, in_channels, 1)  # depth_multiplier=1
+                ),
+                trainable=True, name="dw_weights"
+            )
+            self.pw_weights = tf.Variable(
+                tf.initializers.GlorotUniform()(
+                    shape=(1, 1, in_channels, out_channels)
+                ),
+                trainable=True, name="pw_weights"
+            )
+            self.bn1 = BatchNormalization()
+            self.bn2 = BatchNormalization()
+
+        def __call__(self, x, training=False):
+
+            x = tf.nn.depthwise_conv2d(x, self.dw_weights, strides=self.strides, padding="SAME")
+            x = self.bn1(x, training=training)
+            x = tf.nn.relu6(x)
+
+            x = tf.nn.conv2d(x, self.pw_weights, strides=1, padding="SAME")
+            x = self.bn2(x, training=training)
+            return tf.nn.relu6(x)
+    def __init__(self, classes=8, name=None):
+        super().__init__(name=name)
+        self.blocks = []
+        self.classes = classes
+
+        # Define blocks with explicit channel sizes
+        self.blocks.append(MobileNetTF.ConvBlock(3, 32, stride=2, name="conv1"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(32, 64,stride=1, name="dw1"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(64, 128, stride=2, name="dw2"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 128,stride = 1, name="dw3"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 256, stride=2, name="dw4"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 256,stride = 1, name="dw5"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 512, stride=2, name="dw6"))
+
+        for i in range(5):
+            self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 512, stride = 1,name=f"dw7_{i}"))
+
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 1024, stride=2, name="dw8"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(1024, 1024,stride = 1 ,name="dw9"))
+
+        self.global_pool = GlobalAveragePooling2D()
+        self.dense_weights = tf.Variable(
+            tf.initializers.GlorotUniform()(shape=(1024, classes)),
+            trainable=True, name="dense_weights"
+        )
+        self.dense_bias = tf.Variable(tf.zeros([classes]), trainable=True, name="dense_bias")
+    def __call__(self, x, training=False):
+        for block in self.blocks:
+            x = block(x, training=training)
+        x = self.global_pool(x)
+        x = tf.matmul(x, self.dense_weights) + self.dense_bias
+        return tf.nn.softmax(x)
+'''
+
+#test MobileNetTF & MobileNetTF_Sparse devono dare gli stessi risultati
+'''
+class MobileNetTF(tf.Module):
+    class ConvBlock(tf.Module):
+        def __init__(self, in_channels, out_channels, stride, name=None):
+            super().__init__(name=name)
+            self.stride = stride
+            # self.kernel_size = kernel_size
+            #self.conv_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(3, 3, in_channels, out_channels)),name="conv")
+            self.conv_weights = tf.Variable(tf.ones([3,3,in_channels, out_channels],name="conv"))
+
+            self.bn = BatchNormalization()
+
+        def __call__(self, x, training=False):
+            x = tf.nn.conv2d(x, self.conv_weights, strides=self.stride, padding="SAME")
+            x = self.bn(x, training=training)
+            return tf.nn.relu6(x)
+
+    class DepthwiseConvBlock(tf.Module):
+        def __init__(self, in_channels, out_channels, stride, name=None):
+            super().__init__(name=name)
+            self.strides = [1, stride, stride, 1]
+
+            #self.dw_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(3, 3, in_channels, 1),trainable=True, name="dw_weights"))
+            self.dw_weights = tf.Variable(tf.ones([3,3,in_channels,1]), name="dw_weights")
+            #self.pw_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(1, 1, in_channels, out_channels)),trainable=True, name="pw_weights")
+            self.pw_weights = tf.Variable( tf.ones([1,1,in_channels,out_channels]) ,name="pw_weights")
+            self.bn1 = BatchNormalization()
+            self.bn2 = BatchNormalization()
+
+        def __call__(self, x, training=False):
+
+            x = tf.nn.depthwise_conv2d(x, self.dw_weights, strides=self.strides, padding="SAME")
+            x = self.bn1(x, training=training)
+            x = tf.nn.relu6(x)
+
+            x = tf.nn.conv2d(x, self.pw_weights, strides=1, padding="SAME")
+            x = self.bn2(x, training=training)
+            return tf.nn.relu6(x)
+    def __init__(self, num_classes=8, name=None):
+        super().__init__(name=name)
+        self.blocks = []
+
+        # Define blocks with explicit channel sizes
+        self.blocks.append(MobileNetTF.ConvBlock(3, 32, stride=2, name="conv1"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(32, 64,stride=1, name="dw1"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(64, 128, stride=2, name="dw2"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 128,stride = 1, name="dw3"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 256, stride=2, name="dw4"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 256,stride = 1, name="dw5"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 512, stride=2, name="dw6"))
+
+        for i in range(5):
+            self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 512, stride = 1,name=f"dw7_{i}"))
+
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 1024, stride=2, name="dw8"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(1024, 1024,stride = 1 ,name="dw9"))
+
+        self.global_pool = GlobalAveragePooling2D()
+        #self.dense_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(1024, classes)),trainable=True, name="dense_weights")
+        self.dense_weights = tf.Variable(tf.ones([1024,num_classes], name="dense_weights"))
+        self.dense_bias = tf.Variable(tf.zeros([num_classes]), trainable=True, name="dense_bias")
+    def __call__(self, x, training=False):
+        for block in self.blocks:
+            x = block(x, training=training)
+        x = self.global_pool(x)
+        x = tf.matmul(x, self.dense_weights) + self.dense_bias
+        return tf.nn.softmax(x)
+class MobileNetTF_Sparse(tf.Module):
+    class ConvBlock(tf.Module):
+        def __init__(self, in_channels, out_channels, stride, name=None):
+            super().__init__(name=name)
+            self.stride = stride
+            #self.conv_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(3, 3, in_channels, out_channels)),name="conv")
+            self.conv_weights = SparseTensor(tf.ones([3,3,in_channels, out_channels], name="conv"))
+            self.bn = BatchNormalization()
+
+        def __call__(self, x, training=False):
+            #x = tf.nn.conv2d(x, self.conv_weights, strides=self.stride, padding="SAME")
+            x = conv.sparse_to_dense_conv2d(x,self.conv_weights,self.stride,padding="SAME")
+            x = self.bn(x, training=training)
+            return tf.nn.relu6(x)
+    class DepthwiseConvBlock(tf.Module):
+        def __init__(self, in_channels, out_channels, stride, name=None):
+            super().__init__(name=name)
+            self.strides = [1, stride, stride, 1]
+
+            #self.dw_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(3, 3, in_channels, 1)), trainable=True, name="dw_weights")
+            self.dw_weights = SparseTensor(tf.ones([3,3,in_channels,1]))
+
+            #self.pw_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(1, 1, in_channels, out_channels)),trainable=True, name="pw_weights")
+            self.pw_weights = SparseTensor(tf.ones([1,1,in_channels,out_channels]))
+            self.bn1 = BatchNormalization()
+            self.bn2 = BatchNormalization()
+
+        def __call__(self, x, training=False):
+            #x = tf.nn.depthwise_conv2d(x, self.dw_weights, strides=self.strides, padding="SAME")
+            x = conv.sparse_to_dense_depthwise_conv2d(x,self.dw_weights,self.strides,padding="SAME")
+            x = self.bn1(x, training=training)
+            x = tf.nn.relu6(x)
+
+            #x = tf.nn.conv2d(x, self.pw_weights, strides=1, padding="SAME")
+            x = conv.sparse_to_dense_conv2d(x,self.pw_weights,stride=1,padding="SAME")
+            x = self.bn2(x, training=training)
+            return tf.nn.relu6(x)
+
+    def __init__(self, num_classes=8, name=None):
+        super().__init__(name=name)
+        self.blocks = []
+
+        # Define blocks with explicit channel sizes
+        self.blocks.append(MobileNetTF.ConvBlock(3, 32, stride=2, name="conv1"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(32, 64,stride=1, name="dw1"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(64, 128, stride=2, name="dw2"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 128,stride = 1, name="dw3"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 256, stride=2, name="dw4"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 256,stride = 1, name="dw5"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 512, stride=2, name="dw6"))
+
+        for i in range(5):
+            self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 512, stride = 1,name=f"dw7_{i}"))
+
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 1024, stride=2, name="dw8"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(1024, 1024,stride = 1 ,name="dw9"))
+
+        self.global_pool = GlobalAveragePooling2D()
+
+        #self.dense_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(1024, num_classes)),trainable=True, name="dense_weights" )
+        self.dense_weights = SparseTensor(tf.ones([1024,num_classes]),name="fc_wmio")
+        self.dense_bias = tf.Variable(tf.zeros([num_classes]), trainable=True, name="dense_bias")
+    def __call__(self, x, training=False):
+        for block in self.blocks:
+            x = block(x, training=training)
+        x = self.global_pool(x)
+        #x = tf.matmul(x, self.dense_weights) + self.dense_bias
+        x = conv.matmul(x,self.dense_weights) + self.dense_bias
+        return tf.nn.softmax(x)
+'''
+
+# mobile net prune and regrow
+class MobileNetTF(tf.Module):
+    class ConvBlock(tf.Module):
+        def __init__(self, in_channels, out_channels, stride, sparsity ,name=None):
+            super().__init__(name=name)
+            self.stride = stride
+            #self.conv_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(3, 3, in_channels, out_channels)),name="conv")
+            self.conv_weights = SparseTensor([3,3,in_channels,out_channels],sparsity, name="conv")
+            self.bn = BatchNormalization()
+
+        def __call__(self, x, training=False):
+            #x = tf.nn.conv2d(x, self.conv_weights, strides=self.stride, padding="SAME")
+            x = conv.sparse_to_dense_conv2d(x,self.conv_weights,self.stride,padding="SAME")
+            x = self.bn(x, training=training)
+            return tf.nn.relu6(x)
+    class DepthwiseConvBlock(tf.Module):
+        def __init__(self, in_channels, out_channels, stride, sparsity ,name=None):
+            super().__init__(name=name)
+            self.strides = [1, stride, stride, 1]
+
+            #self.dw_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(3, 3, in_channels, 1)), trainable=True, name="dw_weights")
+            self.dw_weights = SparseTensor([3,3,in_channels,1],sparsity, name="dw_weights")
+
+            #self.pw_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(1, 1, in_channels, out_channels)),trainable=True, name="pw_weights")
+            self.pw_weights = SparseTensor([1,1,in_channels,out_channels],sparsity, name="pw_weights")
+            self.bn1 = BatchNormalization()
+            self.bn2 = BatchNormalization()
+
+        def __call__(self, x, training=False):
+            #x = tf.nn.depthwise_conv2d(x, self.dw_weights, strides=self.strides, padding="SAME")
+            x = conv.sparse_to_dense_depthwise_conv2d(x,self.dw_weights,self.strides,padding="SAME")
+            x = self.bn1(x, training=training)
+            x = tf.nn.relu6(x)
+
+            #x = tf.nn.conv2d(x, self.pw_weights, strides=1, padding="SAME")
+            x = conv.sparse_to_dense_conv2d(x,self.pw_weights,stride=1,padding="SAME")
+            x = self.bn2(x, training=training)
+            return tf.nn.relu6(x)
+
+    def __init__(self,sparsity, num_classes=8, name=None):
+        super().__init__(name=name)
+        self.blocks = []
+
+        # Define blocks with explicit channel sizes
+        self.blocks.append(MobileNetTF.ConvBlock(3, 32, stride=2, sparsity = sparsity, name="conv1"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(32, 64,stride=1,sparsity = sparsity, name="dw1"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(64, 128, stride=2,sparsity = sparsity, name="dw2"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 128,stride = 1,sparsity = sparsity, name="dw3"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 256, stride=2, sparsity = sparsity,name="dw4"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 256,stride = 1,sparsity = sparsity, name="dw5"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 512, stride=2, sparsity = sparsity,name="dw6"))
+
+        for i in range(5):
+            self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 512, stride = 1,sparsity = sparsity,name=f"dw7_{i}"))
+
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 1024, stride=2,sparsity = sparsity, name="dw8"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(1024, 1024,stride = 1 ,sparsity = sparsity,name="dw9"))
+
+        self.global_pool = GlobalAveragePooling2D()
+
+        #self.dense_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(1024, num_classes)),trainable=True, name="dense_weights" )
+        self.dense_weights = SparseTensor([1024,num_classes],sparsity,name="dense")
+        self.dense_bias = tf.Variable(tf.zeros([num_classes]), trainable=True, name="dense_bias")
+
+        self.sparse_tensors = self.get_sparse_tensors()
+
+    def __call__(self, x, training=False):
+        for block in self.blocks:
+            x = block(x, training=training)
+        x = self.global_pool(x)
+        #x = tf.matmul(x, self.dense_weights) + self.dense_bias
+        x = conv.matmul(x,self.dense_weights) + self.dense_bias
+        return tf.nn.softmax(x)
+
+    # TODO: sembra un getter
+    def get_sparse_tensors(self):
+        prunable = []
+        def collect_sparse(module):
+            # Include attributes of this module
+            for attr_name in dir(module):
+                attr = getattr(module, attr_name)
+                if isinstance(attr, SparseTensor):
+                    prunable.append(attr)
+        collect_sparse(self)
+        for submodule in self.submodules:
+            collect_sparse(submodule)
+        return prunable
+
+    def prune(self, rho):
+        prunable = self.sparse_tensors
+        tot_pruned = 0
+        for i, tensor in enumerate(prunable):
+            pruned_i = tensor.prune(rho=rho)
+            tot_pruned = tot_pruned + pruned_i
+        return tot_pruned
+
+    def update_relative_momentum_contributions(self, tensors):
+        total = sum(t.mean_momentum for t in tensors)
+        if total == 0:
+            equal_share = 1.0 / len(tensors)
+            for t in tensors:
+                t.relative_momentum_contribution = equal_share
+        else:
+            for t in tensors:
+                t.relative_momentum_contribution = t.mean_momentum / total
+
+
+    def update_mean_momentums(self, optimizer):
+        for sparse_tensor in self.sparse_tensors:
+            w = sparse_tensor.values
+            idx = optimizer._get_variable_index(w)
+            momentum_tensor = optimizer._momentums[idx]
+            sparse_tensor.mean_momentum = tf.reduce_mean(tf.abs(momentum_tensor))
+
+    def regrow(self, to_regrow):
+        # se vuoi capire perchè esiste regrowth_residual pensa al caso in cui to_regrow = 1
+
+        if to_regrow > self.num_inactive_weights():
+            raise ValueError(
+                f"Cannot regrow {to_regrow} elements. "
+                f"Only {self.num_inactive_weights()} positions available."
+            )
+
+        tot_regrown = 0
+        remaining_to_allocate  = to_regrow
+        active_tensors = self.sparse_tensors
+
+        while remaining_to_allocate  != 0:
+            self.update_relative_momentum_contributions(active_tensors)
+            total_deficit = 0
+            unsaturated_tensors = []
+            for t in active_tensors:
+                expected_regrow = int(remaining_to_allocate  * t.relative_momentum_contribution)
+
+                actual_regrow = t.regrow(requested_growth=expected_regrow)
+                tot_regrown = tot_regrown + actual_regrow
+                deficit = expected_regrow - actual_regrow
+                total_deficit = total_deficit + deficit
+                if not t.is_saturated():
+                    unsaturated_tensors.append(t)
+
+            active_tensors = unsaturated_tensors
+            remaining_to_allocate  = total_deficit
+
+        residual = to_regrow - tot_regrown
+        for t in active_tensors:
+            regrown = t.regrow(residual)
+            residual = residual-regrown
+            if residual == 0:
+                return
+
+    def prune_and_regrow(self,rho,optimizer):
+        print(f"rho: {rho}")
+        self.update_mean_momentums(optimizer)
+        self.reset_prune_and_regrow_stats()
+        num_pruned = self.prune(rho)
+        print(self.prune_summary())
+        self.regrow(num_pruned)
+        print(self.regrow_summary())
+
+    def reset_prune_and_regrow_stats(self):
+        for t in self.sparse_tensors:
+            t.reset_prune_and_regrow_stats()
+
+    def num_pruned(self):
+        tot_pruned = 0
+        for t in self.sparse_tensors:
+            tot_pruned = tot_pruned + t.num_pruned
+        return tot_pruned
+
+    def num_regrown(self):
+        tot_regrown = 0
+        for t in self.sparse_tensors:
+            tot_regrown = tot_regrown + t.num_regrown
+        return tot_regrown
+
+    def prune_summary(self):
+        """Returns a detailed summary of pruning statistics for all sparse tensors.
+
+        Returns:
+            str: Formatted string containing pruning statistics for each tensor and global summary.
+        """
+
+        sep_length = 81
+
+        lines = []
+        lines.append("Pruning Summary")
+        lines.append("=" * sep_length)
+
+        # Table header
+        lines.append(
+            f"{'Layer Name':<15} {'Active/Total (b)':>22} {'Pruned':>8} {'Active/Total (a)':>22} {'Sparsity':>10}")
+        lines.append("-" * sep_length)
+
+        # Update momentum contributions
+        self.update_relative_momentum_contributions(self.sparse_tensors)
+
+        for tensor in self.sparse_tensors:
+            active = tensor.num_active_weights()
+            total = tensor.num_weights()
+            pruned = tensor.num_pruned
+            active_before_pruning = active + pruned
+            sparsity = tensor.tensor_sparsity()
+
+            lines.append(
+                f"{tensor.name:<15} {f'{active_before_pruning:,}/{total:,}':>22} {pruned:>8} "
+                f"{f'{active:,}/{total:,}':>22} {f'{sparsity:.1%}':>10}"
+            )
+
+        lines.append("-" * sep_length)
+
+        # Right-aligned global summary
+        def right_align(label, value):
+            left = f"{label}"
+            right = f"{value}"
+            total_width = sep_length
+            return f"{left}{' ' * (total_width - len(left) - len(right))}{right}"
+
+        lines.append(right_align("Total Pruned Weights: ", f"{self.num_pruned():,}"))
+        lines.append(right_align("Model Sparsity: ", f"{self.model_sparsity():.1%}"))
+        lines.append(
+            right_align("Total Active/Total Weights: ", f"{self.num_active_weights():,}/{self.num_weights():,}"))
+
+        lines.append("=" * sep_length)
+        return "\n".join(lines)
+
+    def regrow_summary(self):
+        """Returns a detailed summary of regrowth statistics for all sparse tensors.
+
+        Returns:
+            str: Formatted string containing regrowth statistics for each tensor and global summary.
+        """
+        sep_length = 88
+        lines = []
+        lines.append("Regrowth Summary")
+        lines.append("=" * sep_length)
+
+        # Table Header
+        lines.append(
+            f"{'Layer Name':<15} {'Momentum':>10} {'Active/Total (b)':>20} "
+            f"{'Regrown':>8} {'Active/Total (a)':>20} {'Sparsity':>10}"
+        )
+        lines.append("-" * sep_length)
+
+        total_regrown = 0
+
+        # Update momentum contributions
+        self.update_relative_momentum_contributions(self.sparse_tensors)
+
+        for tensor in self.sparse_tensors:
+            active_after = tensor.num_active_weights()
+            total = tensor.num_weights()
+            regrown = tensor.num_regrown
+            active_before = active_after - regrown
+            sparsity = tensor.tensor_sparsity()
+            momentum_pct = f"{tensor.relative_momentum_contribution:.1%}"
+
+            lines.append(
+                f"{tensor.name:<15} {momentum_pct:>10} {f'{active_before:,}/{total:,}':>20} "
+                f"{regrown:>8} {f'{active_after:,}/{total:,}':>20} {f'{sparsity:.1%}':>10}"
+            )
+            total_regrown += regrown
+
+        lines.append("-" * sep_length)
+
+        # Right-aligned global summary
+        def right_align(label, value):
+            left = f"{label}"
+            right = f"{value}"
+            total_width = sep_length
+            return f"{left}{' ' * (total_width - len(left) - len(right))}{right}"
+
+        lines.append(right_align("Total Regrown Weights: ", f"{total_regrown:,}"))
+        lines.append(right_align("Model Sparsity: ", f"{self.model_sparsity():.1%}"))
+        lines.append(
+            right_align("Total Active/Total Weights: ", f"{self.num_active_weights():,}/{self.num_weights():,}"))
+
+        lines.append("=" * sep_length)
+        return "\n".join(lines)
+
+    def model_sparsity(self):
+        return self.num_inactive_weights()/self.num_weights()
+
+    def num_active_weights(self):
+        num_active_weights = 0
+        for t in self.sparse_tensors:
+            num_active_weights = num_active_weights + t.num_active_weights()
+        return num_active_weights
+
+    def num_weights(self):
+        num_weights = 0
+        for t in self.sparse_tensors:
+            num_weights = num_weights + t.num_weights()
+        return num_weights
+
+    def num_inactive_weights(self):
+        return self.num_weights() - self.num_active_weights()
+
+
 def main():
-    X_train, y_train = funzioni.load_bloodmnist_subset(); X_val = X_train; y_val = y_train
-    #(X_train, y_train), (X_test, y_test), (X_val, y_val) = funzioni.load_bloodmnist_224()
+    #X_train, y_train = funzioni.load_bloodmnist_subset(); X_val = X_train; y_val = y_train
+    (X_train, y_train), (X_test, y_test), (X_val, y_val) = funzioni.load_bloodmnist_224()
 
-    model = ResNet50_sparse2(sparsity= 0.8, num_classes=8, recompute = True)
-    #model = ResNet50_2(num_classes=8)
+    #model = ResNet50_sparse2(sparsity= 0.8, recompute = True)
+    ##model = ResNet50_2(num_classes=8)
 
-    max_iter = 13000
-    rho0 = 0.5
-    prune_and_regrow_stride  = 2
+    model = MobileNetTF(sparsity=0.8)
+
+    max_iter = 130000
     funzioni.train(model,
                    X_train,
                    y_train,
@@ -2115,15 +2672,14 @@ def main():
                    y_val,
                    epochs=100,
                    max_iter = max_iter,
-                   batch_size=32,
+                   batch_size=16,
                    lr=0.001,
                    live_plotting=False,
-                   weights_chekpoint_stride=300,
-                   prune_and_regrow_stride=prune_and_regrow_stride,
-                   rho0 = rho0)
+                   weights_chekpoint_stride=2,
+                   prune_and_regrow_stride=1000,
+                   rho0 = 0.5)
 
 if __name__ == '__main__':
     main()
 
 
-#TODO:             tensor.rowmajor_reorder()
