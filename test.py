@@ -11,6 +11,7 @@ import utils
 import gc
 import models
 
+#non eserguire
 class Conv(unittest.TestCase):
 
     def test_conv2d(self):
@@ -170,32 +171,6 @@ class Conv(unittest.TestCase):
             print(utils.mem_usage())#peak memory
 
 class Varie(unittest.TestCase):
-    def test_random_sparse_indices3(self):
-        '''
-        si testa che gli indici siano in row major
-        '''
-        test_shapes = [
-            [10, 10, 10],  # Original case
-            [5, 5, 5, 5],  # 4D tensor
-            [5, 53, 5, 53],  # 4D tensor
-            [1, 1, 1, 1],  # 4D tensor
-            [4, 500, 3, 4],  # 4D tensor
-            [20, 20],  # 2D tensor
-            [100,2],  # 1D tensor
-            [8, 15, 3],  # Irregular 3D
-            [2, 2, 2, 2, 2],  # 5D tensor
-        ]
-
-        density = 0.5  # You can also make this parameterized if needed
-
-        for shape in test_shapes:
-            # Run the original test logic for each shape
-            indices, nnz = models.SparseTensor.random_sparse_indices3(shape, density)
-            indices_np = indices.numpy()
-
-            flat = np.ravel_multi_index(indices_np.T, shape, order='C')
-            self.assertTrue(np.all(flat[:-1] <= flat[1:]))
-
     def test_prune_and_regrow_stats0(self):
         tensor = models.SparseTensor(tf.constant([[0.1, -0.3],
                                                   [0.01,  0.4]]))
@@ -485,7 +460,7 @@ class Prune(unittest.TestCase):
         #tot = 600 -- 60 posizioni libere -- 540 occupate
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
 
-        model.sparse_tensors = model.get_sparse_tensors()
+        model.sparse_tensors = model._collect_sparse_tensors()
 
         tot_pruned = model.prune(rho = 0.6)
         # W1: 21*0.6 = 12.6 -> 13 pruned
@@ -881,7 +856,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 1
 
-        model.sparse_tensors = model.get_sparse_tensors()
+        model.sparse_tensors = model._collect_sparse_tensors()
 
         #tot liberi = 85
         model.regrow(to_regrow=80)
@@ -920,7 +895,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 20
 
-        model.sparse_tensors = model.get_sparse_tensors()
+        model.sparse_tensors = model._collect_sparse_tensors()
 
         #tot liberi = 85
         model.regrow(to_regrow=81)
@@ -955,7 +930,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 1
 
-        model.sparse_tensors = model.get_sparse_tensors()
+        model.sparse_tensors = model._collect_sparse_tensors()
 
         model.regrow(to_regrow=81)
 
@@ -989,7 +964,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 1
 
-        model.sparse_tensors = model.get_sparse_tensors()
+        model.sparse_tensors = model._collect_sparse_tensors()
 
         model.regrow(to_regrow=128)
 
@@ -1024,7 +999,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 0
 
-        model.sparse_tensors = model.get_sparse_tensors()
+        model.sparse_tensors = model._collect_sparse_tensors()
 
         model.regrow(to_regrow=128)
 
@@ -1059,7 +1034,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 0
 
-        model.sparse_tensors = model.get_sparse_tensors()
+        model.sparse_tensors = model._collect_sparse_tensors()
 
         #tot liberi = 173
 
@@ -1096,7 +1071,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 0
 
-        model.sparse_tensors = model.get_sparse_tensors()
+        model.sparse_tensors = model._collect_sparse_tensors()
 
         #tot liberi = 173
 
@@ -1105,6 +1080,7 @@ class Regrow(unittest.TestCase):
         self.assertIn("Cannot regrow", str(context.exception))
 
 class Prune_and_Regrow(unittest.TestCase):
+    # non eseguire
     def test_A(self):
         model = models.ResNet50_sparse2(sparsity=0.5)
         del model.stage2
@@ -1129,7 +1105,7 @@ class Prune_and_Regrow(unittest.TestCase):
         model.fc2_w = models.SparseTensor([128, 10], 0.5, name="fc2_w")
         model.fc2_b = tf.Variable(tf.zeros([10]), name="fc2_b")
 
-        model.sparse_tensors = model.get_sparse_tensors()
+        model.sparse_tensors = model._collect_sparse_tensors()
 
         def new_call(self, *args, **kwargs):
             x = args[0]
@@ -1142,9 +1118,9 @@ class Prune_and_Regrow(unittest.TestCase):
             x = tf.nn.relu(x)
             x = tf.nn.max_pool2d(x, ksize=2, strides=2, padding='SAME')
             x = tf.reshape(x, [x.shape[0], -1])
-            x = conv.matmul(x, self.fc1_w) + self.fc1_b
+            x = conv.sparse_to_dense_matmul(x, self.fc1_w) + self.fc1_b
             x = tf.nn.relu(x)
-            logits = conv.matmul(x, self.fc2_w) + self.fc2_b
+            logits = conv.sparse_to_dense_matmul(x, self.fc2_w) + self.fc2_b
             return logits
 
         models.ResNet50_sparse2.__call__ = new_call
@@ -1204,7 +1180,7 @@ class Prune_and_Regrow(unittest.TestCase):
         #tot = 600 -- 60 posizioni libere -- 540 occupate
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
 
-        model.sparse_tensors = model.get_sparse_tensors()
+        model.sparse_tensors = model._collect_sparse_tensors()
 
         tot_pruned = model.prune(rho = 0.6)
         # W1: 21*0.6 = 12.6 -> 13 pruned

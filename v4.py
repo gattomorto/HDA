@@ -520,10 +520,10 @@ class ConvSparse(tf.Module):
 
         x = tf.reshape(x, [x.shape[0], -1])  # [batch, 7*7*64]
 
-        x = conv.matmul(x, self.fc1_w) + self.fc1_b
+        x = conv.sparse_to_dense_matmul(x, self.fc1_w) + self.fc1_b
         x = tf.nn.relu(x)
 
-        logits = conv.matmul(x, self.fc2_w) + self.fc2_b
+        logits = conv.sparse_to_dense_matmul(x, self.fc2_w) + self.fc2_b
 
         return logits
 
@@ -568,10 +568,10 @@ class ConvSparse_check(tf.Module):
         x = self.conv_block_2(x)
 
         x = tf.reshape(x, [tf.shape(x)[0], -1])
-        x = conv.matmul(x, self.fc1_w) + self.fc1_b
+        x = conv.sparse_to_dense_matmul(x, self.fc1_w) + self.fc1_b
         x = tf.nn.relu(x)
 
-        logits = conv.matmul(x, self.fc2_w) + self.fc2_b
+        logits = conv.sparse_to_dense_matmul(x, self.fc2_w) + self.fc2_b
         return logits
 
 # usa indices , values, e shape senza dichiarare funzioni.SparseTensor
@@ -583,27 +583,27 @@ class ConvSparse_explicit(tf.Module):
 
         #self.conv1_w = funzioni.SparseTensor([3, 3, 1, 5],sparsity)
         self.conv1_shape = [3, 3, 1, 5]
-        self.conv1_indices,nnz = funzioni.SparseTensor.random_sparse_indices3(self.conv1_shape,sparsity)
+        self.conv1_indices,nnz = funzioni.SparseTensor.random_indices(self.conv1_shape, sparsity)
         self.conv1_values = tf.Variable(tf.random.normal([nnz]), name="conv1_values")
         self.conv1_b = tf.Variable(tf.zeros([5]), name="conv1_b")
 
 
         #self.conv2_w = funzioni.SparseTensor([3, 3, 5, 8], sparsity)
         self.conv2_shape = [3, 3, 5, 8]
-        self.conv2_indices,nnz = funzioni.SparseTensor.random_sparse_indices3(self.conv2_shape,sparsity)
+        self.conv2_indices,nnz = funzioni.SparseTensor.random_indices(self.conv2_shape, sparsity)
         self.conv2_values = tf.Variable(tf.random.normal([nnz]), name="conv2_values")
         self.conv2_b = tf.Variable(tf.zeros([8]), name="conv2_b")
 
 
         #self.fc1_w = funzioni.SparseTensor([7 * 7 * 8, 128],sparsity,name="fc1_wmio")
         self.fc1_shape = [7 * 7 * 8, 128]
-        self.fc1_indices,nnz = funzioni.SparseTensor.random_sparse_indices3(self.fc1_shape,sparsity)
+        self.fc1_indices,nnz = funzioni.SparseTensor.random_indices(self.fc1_shape, sparsity)
         self.fc1_values = tf.Variable(tf.random.normal([nnz]), name="fc1_values")
         self.fc1_b = tf.Variable(tf.zeros([128]), name="fc1_b")
 
         #self.fc2_w = funzioni.SparseTensor([128, num_classes],sparsity,name="fc2_wmio")
         self.fc2_shape = [ 128, num_classes]
-        self.fc2_indices,nnz = funzioni.SparseTensor.random_sparse_indices3(self.fc2_shape,sparsity)
+        self.fc2_indices,nnz = funzioni.SparseTensor.random_indices(self.fc2_shape, sparsity)
         self.fc2_values = tf.Variable(tf.random.normal([nnz]), name="fc2_values")
         self.fc2_b = tf.Variable(tf.zeros([num_classes]), name="fc2_b")
 

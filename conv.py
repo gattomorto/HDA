@@ -935,32 +935,7 @@ def classic_conv2d_4(input, filters_sparse, stride=1, padding='SAME'):
 
 #############################################################################
 
-'''def sparse_to_dense_conv2d(input, sp_filter, stride=1, padding='SAME'):
-    tf_sp = sp_filter.to_tf_sparse()
-    return direct_sparse_conv2d_3(input, tf_sp, stride=stride, padding=padding)
 
-    #tt = v4.create_tensor_row_major(3, 1, 5)
-    #conv1 = sp_filter.to_tf_dense()
-
-    #print(tf.reduce_max(tf.abs(dense_filter-conv1)))
-
-    return tf.nn.conv2d(input,dense_filter,stride,padding)'''
-def sparse_to_dense_conv2d(input, sp_filter, stride=1, padding='SAME'):
-    #TODO: fare piu efficiente?
-    dense_filter = tf.sparse.to_dense(sp_filter.to_tf_sparse())
-    return tf.nn.conv2d(input,dense_filter,stride,padding)
-
-def sparse_to_dense_depthwise_conv2d(input, sp_filter, strides, padding='SAME'):
-    dense_filter = tf.sparse.to_dense(sp_filter.to_tf_sparse())
-    return tf.nn.depthwise_conv2d(input,dense_filter,strides,padding)
-
-#TODO: sparse_to_dense_matmul
-def matmul(X,Y_sp):
-    Y_dense = sparse_to_dense(Y_sp.indices, Y_sp.shape,Y_sp.values,
-                        default_value=0,
-                        validate_indices=True)
-    #TODO: b_is_sparse = True dà risultati diversi -- forse gli indici non sono corretti
-    return tf.matmul(X, Y_dense, b_is_sparse=False)
 
 
 if __name__ == '__main__':
