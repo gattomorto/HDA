@@ -137,7 +137,9 @@ class SparseTensor(tf.Module):
             new_indices = tf.gather(available_coords, selected_indices)
 
             # Initialize new values
-            new_values = tf.zeros([actual_regrow], dtype=self.values.dtype)
+            initializer = keras.initializers.HeNormal()
+            new_values = initializer(shape=[actual_regrow], dtype=self.values.dtype)
+            #new_values = tf.zeros([actual_regrow], dtype=self.values.dtype)
 
             # Update indices and values
             self.indices = tf.concat([self.indices, new_indices], axis=0)
@@ -412,9 +414,9 @@ class ResNet50_sparse2(tf.Module):
         self.update_mean_momentums(optimizer)
         self.reset_prune_and_regrow_stats()
         num_pruned = self.prune(rho)
-        print(self.prune_summary())
+        #print(self.prune_summary())
         self.regrow(num_pruned)
-        print(self.regrow_summary())
+        #print(self.regrow_summary())
 
     def reset_prune_and_regrow_stats(self):
         for t in self.sparse_tensors:
@@ -755,9 +757,9 @@ class MobileNetTF(tf.Module):
         self.update_mean_momentums(optimizer)
         self.reset_prune_and_regrow_stats()
         num_pruned = self.prune(rho)
-        print(self.prune_summary())
+        #print(self.prune_summary())
         self.regrow(num_pruned)
-        print(self.regrow_summary())
+        #print(self.regrow_summary())
 
     def reset_prune_and_regrow_stats(self):
         for t in self.sparse_tensors:
@@ -1040,18 +1042,24 @@ def train(
 
             it += 1
 
-            log_message = f"Step {it}, Loss: {loss_val}\n"
-            print(log_message, end  = '')
+
+            print(f"E: {epoch}, BL: {best_loss}, Step {it}, Loss: {loss_val}")
             with open("training_log.txt", 'a') as f:
-                f.write(log_message)
+                f.write(f"{loss_val}\n")
 
             #print(f"Peak Memory: {tf.config.experimental.get_memory_info('CPU:0')['peak'] / 1024 ** 2:.1f} MB")
 
-
             if it % prune_and_regrow_stride == 0:
-                print("Prune & Regrow")
-                model.prune_and_regrow(rho0 ** (int(it / prune_and_regrow_stride)), optimizer)
-                optimizer = keras.optimizers.Adam(learning_rate=float(optimizer.learning_rate.numpy()))
+                rho = rho0 ** (int(it / prune_and_regrow_stride))
+                print("phi:",int(model.num_active_weights()*rho))
+                if int(model.num_active_weights()*rho) > len(model.sparse_tensors):
+                    print("Prune & Regrow")
+                    model.prune_and_regrow(rho, optimizer)
+                    optimizer = keras.optimizers.Adam(learning_rate=float(optimizer.learning_rate.numpy()))
+                    best_loss = float('inf')
+                    patience_counter=0
+                else:
+                    print("Prune & Regrow Aborted")
 
             if it % test_stride == 0:
                 #acc_tr = test(model, X_tr, y_tr)
@@ -1081,14 +1089,51 @@ def train(
         print(f"Patience counter: {patience_counter}")
 
 
+import matplotlib.pyplot as plt
+
+import matplotlib.pyplot as plt
+
+
+def plot_overlapped_curves(file_list, start=0):
+    """
+    Plots overlapped curves from a list of .txt files, skipping the first 'start' lines of each file.
+
+    Parameters:
+        file_list (list of str): List of paths to .txt files.
+        start (int): Number of initial lines to skip in each file.
+    """
+    plt.figure(figsize=(10, 6))
+
+    for file_path in file_list:
+        try:
+            with open(file_path, 'r') as f:
+                lines = f.readlines()[start:]  # Skip the first 'start' lines
+                data = [float(line.strip()) for line in lines if line.strip()]
+                plt.plot(data, label=file_path)
+        except Exception as e:
+            print(f"Error reading {file_path}: {e}")
+
+    plt.xlabel('Index')
+    plt.ylabel('Value')
+    plt.title('Overlapped Curves from Text Files')
+    plt.legend(loc='best', fontsize='small')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
 def main():
+    file_list = ['./runs/r6.txt','./runs/r10.txt']
+    plot_overlapped_curves(file_list,start=2300)
+
+    exit()
+
     X_train, y_train = load_bloodmnist_subset(); X_val = X_train; y_val = y_train
     #(X_train, y_train), (X_test, y_test), (X_val, y_val) = load_bloodmnist_224()
 
-    #model = ResNet50_sparse2(sparsity= 0.8, recompute = True)
-    ##model = ResNet50_2(num_classes=8)
+    model = ResNet50_sparse2(sparsity= 0.8, recompute = False)
 
-    model = MobileNetTF(sparsity=0.8, recompute_gradient=False)
+    #model = MobileNetTF(sparsity=0.8, recompute_gradient=False)
 
     max_iter = 130000
     train(model,
@@ -1096,13 +1141,13 @@ def main():
            y_train,
            X_val,
            y_val,
-           epochs=100,
+           epochs = 100,
            max_iter = max_iter,
-           batch_size=16,
-           lr=0.001,
-           patience=3,
-           prune_and_regrow_stride=209,
-           test_stride=10,
+           batch_size = 1,
+           lr = 0.001,
+           patience = 3,
+           prune_and_regrow_stride = 1,
+           test_stride = 10000,
            rho0 = 0.5,
            microbatch_size = None
            )
