@@ -1,6 +1,5 @@
 import unittest
 import psutil
-import funzioni
 import v4
 import numpy as np
 import tensorflow as tf
@@ -609,8 +608,9 @@ class Regrow(unittest.TestCase):
         available = tf.constant([ [0,0,0],[0,0,1],[1,0,2],[2,0,1] ],dtype = tf.int64) # il nuovo indice deve essere uno tra quelli liberi
         self.assertTrue(self.sparse_indices_is_subset(diff,available))
 
-        # controllo che tensor nelle nuove posizioni sia 0
+        # controllo che tensor nelle nuove posizioni sia 1.7243673
         self.assertTrue(self.sparse_tensor_indices_equal_to_val(tensor, diff, 0))
+
     def test_B(self):
         '''
         request = 2

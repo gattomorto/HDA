@@ -3,12 +3,19 @@ import numpy as np
 import keras
 import random
 import os
-from tensorflow.python.ops.gen_sparse_ops import sparse_reorder, sparse_tensor_dense_mat_mul, sparse_to_dense
+import math
+import cv2
+import matplotlib.pyplot as plt
+import gc
 
+from tensorflow.python.ops.gen_sparse_ops import sparse_reorder, sparse_tensor_dense_mat_mul, sparse_to_dense
+'''
 folder_path = '/content/drive/MyDrive/hda'
 import sys
 sys.path.append(folder_path)
+'''
 
+#se togli questo i risultati dei test potrebbero cambiare
 SEED = 0
 tf.random.set_seed(SEED)
 np.random.seed(SEED)
@@ -557,6 +564,7 @@ class ResNet50_sparse2(tf.Module):
         return self.num_weights() - self.num_active_weights()
 
 # mobile net, check, prune and regrow
+'''
 class MobileNetTF(tf.Module):
     class ConvBlock(tf.Module):
         def __init__(self, in_channels, out_channels, stride, sparsity, recompute_gradient=False, name=None):
@@ -898,11 +906,148 @@ class MobileNetTF(tf.Module):
 
     def num_inactive_weights(self):
         return self.num_weights() - self.num_active_weights()
+'''
+# mobile net, sparse
+'''
+class MobileNetTF(tf.Module):
+    class ConvBlock(tf.Module):
+        def __init__(self, in_channels, out_channels, stride, sparsity ,name=None):
+            super().__init__(name=name)
+            self.stride = stride
+            #self.conv_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(3, 3, in_channels, out_channels)),name="conv")
+            self.conv_weights = SparseTensor([3,3,in_channels,out_channels],sparsity, name="conv")
+            self.bn = keras.layers.BatchNormalization()
+
+        def __call__(self, x, training=False):
+            #x = tf.nn.conv2d(x, self.conv_weights, strides=self.stride, padding="SAME")
+            x = sparse_to_dense_conv2d(x,self.conv_weights,self.stride,padding="SAME")
+            x = self.bn(x, training=training)
+            return tf.nn.relu6(x)
+    class DepthwiseConvBlock(tf.Module):
+        def __init__(self, in_channels, out_channels, stride, sparsity ,name=None):
+            super().__init__(name=name)
+            self.strides = [1, stride, stride, 1]
+
+            #self.dw_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(3, 3, in_channels, 1)), trainable=True, name="dw_weights")
+            self.dw_weights = SparseTensor([3,3,in_channels,1],sparsity, name="dw_weights")
+
+            #self.pw_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(1, 1, in_channels, out_channels)),trainable=True, name="pw_weights")
+            self.pw_weights = SparseTensor([1,1,in_channels,out_channels],sparsity, name="pw_weights")
+            self.bn1 = keras.layers.BatchNormalization()
+            self.bn2 = keras.layers.BatchNormalization()
+
+        def __call__(self, x, training=False):
+            #x = tf.nn.depthwise_conv2d(x, self.dw_weights, strides=self.strides, padding="SAME")
+            x = sparse_to_dense_depthwise_conv2d(x,self.dw_weights,self.strides,padding="SAME")
+            x = self.bn1(x, training=training)
+            x = tf.nn.relu6(x)
+
+            #x = tf.nn.conv2d(x, self.pw_weights, strides=1, padding="SAME")
+            x = sparse_to_dense_conv2d(x,self.pw_weights,stride=1,padding="SAME")
+            x = self.bn2(x, training=training)
+            return tf.nn.relu6(x)
+
+    def __init__(self,sparsity, num_classes=8, name=None):
+        super().__init__(name=name)
+        self.blocks = []
+
+        # Define blocks with explicit channel sizes
+        self.blocks.append(MobileNetTF.ConvBlock(3, 32, stride=2, sparsity = sparsity, name="conv1"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(32, 64,stride=1,sparsity = sparsity, name="dw1"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(64, 128, stride=2,sparsity = sparsity, name="dw2"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 128,stride = 1,sparsity = sparsity, name="dw3"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 256, stride=2, sparsity = sparsity,name="dw4"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 256,stride = 1,sparsity = sparsity, name="dw5"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 512, stride=2, sparsity = sparsity,name="dw6"))
+
+        for i in range(5):
+            self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 512, stride = 1,sparsity = sparsity,name=f"dw7_{i}"))
+
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 1024, stride=2,sparsity = sparsity, name="dw8"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(1024, 1024,stride = 1 ,sparsity = sparsity,name="dw9"))
+
+
+        self.global_pool = keras.layers.GlobalAveragePooling2D()
+        #self.dense_weights = tf.Variable(tf.initializers.GlorotUniform()(shape=(1024, num_classes)),trainable=True, name="dense_weights" )
+        self.dense_weights = SparseTensor([1024,num_classes],sparsity,name="dense")
+        self.dense_bias = tf.Variable(tf.zeros([num_classes]), trainable=True, name="dense_bias")
+
+    def __call__(self, x, training=False):
+        for block in self.blocks:
+            x = block(x, training=training)
+        x = self.global_pool(x)
+        #x = tf.matmul(x, self.dense_weights) + self.dense_bias
+        x = sparse_to_dense_matmul(x,self.dense_weights) + self.dense_bias
+        return tf.nn.softmax(x)
+'''
+# mobile net, sparse, 32x32
+class MobileNetTF(tf.Module):
+    class ConvBlock(tf.Module):
+        def __init__(self, in_channels, out_channels, stride, sparsity, name=None):
+            super().__init__(name=name)
+            self.stride = stride
+            self.conv_weights = SparseTensor([3, 3, in_channels, out_channels], sparsity, name="conv")
+            self.bn = keras.layers.BatchNormalization()
+
+        def __call__(self, x, training=False):
+            x = sparse_to_dense_conv2d(x, self.conv_weights, self.stride, padding="SAME")
+            x = self.bn(x, training=training)
+            return tf.nn.relu6(x)
+
+    class DepthwiseConvBlock(tf.Module):
+        def __init__(self, in_channels, out_channels, stride, sparsity, name=None):
+            super().__init__(name=name)
+            self.strides = [1, stride, stride, 1]
+            self.dw_weights = SparseTensor([3, 3, in_channels, 1], sparsity, name="dw_weights")
+            self.pw_weights = SparseTensor([1, 1, in_channels, out_channels], sparsity, name="pw_weights")
+            self.bn1 = keras.layers.BatchNormalization()
+            self.bn2 = keras.layers.BatchNormalization()
+
+        def __call__(self, x, training=False):
+            x = sparse_to_dense_depthwise_conv2d(x, self.dw_weights, self.strides, padding="SAME")
+            x = self.bn1(x, training=training)
+            x = tf.nn.relu6(x)
+            x = sparse_to_dense_conv2d(x, self.pw_weights, stride=1, padding="SAME")
+            x = self.bn2(x, training=training)
+            return tf.nn.relu6(x)
+
+    def __init__(self, sparsity, num_classes=8, name=None):
+        super().__init__(name=name)
+        self.blocks = []
+
+        # Initial conv (stride=1 for 32x32 inputs)
+        self.blocks.append(MobileNetTF.ConvBlock(3, 32, stride=1, sparsity=sparsity, name="conv1"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(32, 64, stride=1, sparsity=sparsity, name="dw1"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(64, 128, stride=2, sparsity=sparsity, name="dw2"))  # 32x32 → 16x16
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 128, stride=1, sparsity=sparsity, name="dw3"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 256, stride=2, sparsity=sparsity, name="dw4"))  # 16x16 → 8x8
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 256, stride=1, sparsity=sparsity, name="dw5"))
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 512, stride=2, sparsity=sparsity, name="dw6"))  # 8x8 → 4x4
+
+        # Optional: Remove some blocks to avoid over-downsampling
+        # for i in range(2):  # Fewer repeats for small inputs
+        #     self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 512, stride=1, sparsity=sparsity, name=f"dw7_{i}"))
+
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 1024, stride=1, sparsity=sparsity, name="dw8"))  # Keep 4x4
+        self.blocks.append(MobileNetTF.DepthwiseConvBlock(1024, 1024, stride=1, sparsity=sparsity, name="dw9"))
+
+        self.global_pool = keras.layers.GlobalAveragePooling2D()
+        self.dense_weights = SparseTensor([1024, num_classes], sparsity, name="dense")
+        self.dense_bias = tf.Variable(tf.zeros([num_classes]), trainable=True, name="dense_bias")
+
+    def __call__(self, x, training=False):
+        for block in self.blocks:
+            x = block(x, training=training)
+        x = self.global_pool(x)
+        x = sparse_to_dense_matmul(x, self.dense_weights) + self.dense_bias
+        return tf.nn.softmax(x)
 
 
 def load_bloodmnist_224():
-    data = np.load("bloodmnist_224.npz")
-    #data = np.load("/content/drive/MyDrive/hda/bloodmnist_224.npz")
+    try:
+        data = np.load("bloodmnist_224.npz")
+    except:
+        data = np.load("/content/drive/MyDrive/hda/bloodmnist_224.npz")
 
     X_train = data['train_images'].astype("float32") / 255.0
     y_train = data['train_labels']
@@ -932,7 +1077,7 @@ def load_bloodmnist_subset():
     print(f"Loaded subset: {X.shape}, {y.shape}")
     return X, y
 
-def test(model, X, y, batch_size=32):
+def test(model, X, y, batch_size=2000):
     num_samples = X.shape[0]
     num_correct = 0
 
@@ -948,6 +1093,59 @@ def test(model, X, y, batch_size=32):
 
     accuracy = num_correct / num_samples
     return accuracy
+
+
+def test2(model, X, y, patch_size=32, stride=16):
+    """
+    Test model on high-resolution images using patch-based confidence-weighted voting.
+
+    Args:
+        model: Trained model
+        X: High resolution test images (N, H, W, 3)
+        y: True labels (N, num_classes) - one-hot encoded
+        patch_size: Size of patches to extract
+        stride: Stride for patch extraction
+
+    Returns:
+        accuracy: Overall accuracy on the test dataset
+    """
+    num_samples = X.shape[0]
+    predictions = []
+    true_labels = []
+
+    for i in range(num_samples):
+        # Extract patches from single image
+        single_image = X[i:i + 1]  # Keep batch dimension
+        single_label = y[i:i + 1]  # Keep batch dimension
+
+        retained_patches, retained_labels, _, _ = extract_violet_patches(
+            single_image, single_label, patch_size=patch_size, stride=stride
+        )
+
+        if len(retained_patches) == 0:
+            raise Exception
+        else:
+            # Get predictions for all patches from this image
+            patch_preds = model(retained_patches, training=False)
+
+            # Convert to numpy if it's a tensor
+            patch_preds = patch_preds.numpy()
+
+            # Sum probabilities across all patches and take argmax
+            summed_probs = np.sum(patch_preds, axis=0)
+            predicted_class = np.argmax(summed_probs)
+
+        predictions.append(predicted_class)
+        true_labels.append(np.argmax(y[i]))
+
+    # Calculate accuracy
+    predictions = np.array(predictions)
+    true_labels = np.array(true_labels)
+    accuracy = np.mean(predictions == true_labels)
+
+    return accuracy
+
+
 
 
 def sparse_to_dense_conv2d(input, sp_filter, stride=1, padding='SAME'):
@@ -971,137 +1169,10 @@ def sparse_to_dense_matmul(X,Y_sp):
     return tf.matmul(X, Y_dense, b_is_sparse=False)
 
 
-def train(
-    model,
-    X_tr,
-    y_tr,
-    X_val,
-    y_val,
-    epochs,
-    max_iter,
-    batch_size,
-    lr,
-    prune_and_regrow_stride,
-    test_stride,
-    patience,
-    rho0,
-    microbatch_size
-):
-    optimizer = keras.optimizers.Adam(learning_rate=lr)
-    loss_fn = keras.losses.CategoricalCrossentropy(from_logits=False)
-    with tf.device('/cpu:0'):
-        dataset = tf.data.Dataset.from_tensor_slices((X_tr, y_tr)).batch(batch_size)
-
-    it = 0
-
-    best_loss = float('inf')
-    patience_counter = 0
-    step_losses = []
-    step_numbers = []
-
-
-
-    for epoch in range(epochs):
-        print(f"\nEpoch {epoch + 1}")
-        epoch_loss = 0
-        num_batches = 0
-
-        for step, (x_batch, y_batch) in enumerate(dataset):
-            if microbatch_size is None:
-                with tf.GradientTape() as tape:
-                    #TODO: logits non va bene
-                    logits = model(x_batch, training=True)
-                    loss = loss_fn(y_batch, logits)
-                grads = tape.gradient(loss, model.trainable_variables)
-                optimizer.apply_gradients(zip(grads, model.trainable_variables))
-                loss_val = loss.numpy()
-
-            else:
-                microbatches = tf.data.Dataset.from_tensor_slices((x_batch, y_batch)).batch(microbatch_size)
-                accum_grads = [tf.zeros_like(var) for var in model.trainable_variables]
-                total_loss = 0.0
-                num_microbatches = 0
-
-                for x_micro, y_micro in microbatches:
-                    with tf.GradientTape() as tape:
-                        logits = model(x_micro, training=True)
-                        loss = loss_fn(y_micro, logits)
-                    grads = tape.gradient(loss, model.trainable_variables)
-                    accum_grads = [acc_g + g for acc_g, g in zip(accum_grads, grads)]
-                    total_loss += loss.numpy()
-                    num_microbatches += 1
-
-                avg_grads = [g / num_microbatches for g in accum_grads]
-                optimizer.apply_gradients(zip(avg_grads, model.trainable_variables))
-                loss_val = total_loss / num_microbatches
-
-            epoch_loss += loss_val
-            step_losses.append(loss_val)
-            step_numbers.append(it)
-            num_batches += 1
-
-            it += 1
-
-
-            print(f"E: {epoch}, BL: {best_loss}, Step {it}, Loss: {loss_val}")
-            with open("training_log.txt", 'a') as f:
-                f.write(f"{loss_val}\n")
-
-            #print(f"Peak Memory: {tf.config.experimental.get_memory_info('CPU:0')['peak'] / 1024 ** 2:.1f} MB")
-
-            if it % prune_and_regrow_stride == 0:
-                rho = rho0 ** (int(it / prune_and_regrow_stride))
-                print("phi:",int(model.num_active_weights()*rho))
-                if int(model.num_active_weights()*rho) > len(model.sparse_tensors):
-                    print("Prune & Regrow")
-                    model.prune_and_regrow(rho, optimizer)
-                    optimizer = keras.optimizers.Adam(learning_rate=float(optimizer.learning_rate.numpy()))
-                    best_loss = float('inf')
-                    patience_counter=0
-                else:
-                    print("Prune & Regrow Aborted")
-
-            if it % test_stride == 0:
-                #acc_tr = test(model, X_tr, y_tr)
-                acc_tr = -1
-                acc_val = test(model, X_val, y_val)
-                print(f"Step {it}, Accuracy Train: {acc_tr:.3f},  Accuracy Val: {acc_val:.3f}")
-
-
-            if it == max_iter:
-                print("max iter reached")
-                return
-
-        avg_epoch_loss = epoch_loss / num_batches
-        print(f"Epoch {epoch + 1} Avg Loss: {avg_epoch_loss}")
-
-        if avg_epoch_loss < best_loss:
-            best_loss = avg_epoch_loss
-            patience_counter = 0
-        else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                new_lr = optimizer.learning_rate.numpy() * 0.5
-                optimizer.learning_rate.assign(new_lr)
-                print(f"Reducing LR to {new_lr:.6f}")
-                patience_counter = 0
-
-        print(f"Patience counter: {patience_counter}")
-
-
-import matplotlib.pyplot as plt
-
-import matplotlib.pyplot as plt
 
 
 def plot_overlapped_curves(file_list, start=0):
-    """
-    Plots overlapped curves from a list of .txt files, skipping the first 'start' lines of each file.
 
-    Parameters:
-        file_list (list of str): List of paths to .txt files.
-        start (int): Number of initial lines to skip in each file.
-    """
     plt.figure(figsize=(10, 6))
 
     for file_path in file_list:
@@ -1122,18 +1193,246 @@ def plot_overlapped_curves(file_list, start=0):
     plt.show()
 
 
-def main():
-    file_list = ['./runs/r6.txt','./runs/r10.txt']
-    plot_overlapped_curves(file_list,start=2300)
+def show_image(X, y, index=0):
+    image = X[index]
+    plt.imshow(image)
+    plt.title(y[index])
+    plt.axis('off')
+    plt.show()
 
+
+
+#TODO: studiare bene le immagini
+def extract_violet_patches(X, y, patch_size, stride):
+    N, H, W, C = X.shape
+    num_patches_h = (H - patch_size) // stride + 1
+    num_patches_w = (W - patch_size) // stride + 1
+
+    # Initialize lists for patches
+    retained_patches = []
+    retained_labels = []
+    discarded_patches = []
+    discarded_labels = []
+
+    # Define violet color range in HSV
+    lower_violet = np.array([130, 50, 50])  # HSV range for violet
+    upper_violet = np.array([160, 255, 255])
+
+    for n in range(N):
+        # Convert normalized RGB (0-1) to RGB (0-255) for OpenCV
+        img_rgb_255 = (X[n] * 255).astype(np.uint8)
+
+        # Convert image to HSV
+        img_hsv = cv2.cvtColor(img_rgb_255, cv2.COLOR_RGB2HSV)
+
+        for i in range(num_patches_h):
+            for j in range(num_patches_w):
+                # Extract patch coordinates
+                h_start = i * stride
+                h_end = h_start + patch_size
+                w_start = j * stride
+                w_end = w_start + patch_size
+
+                # Get the patch in RGB (keep original normalized values)
+                patch_rgb = X[n, h_start:h_end, w_start:w_end, :]
+
+                # Get the patch in HSV (from scaled version)
+                patch_hsv = img_hsv[h_start:h_end, w_start:w_end, :]
+
+                # Create mask for violet pixels
+                violet_mask = cv2.inRange(patch_hsv, lower_violet, upper_violet)
+
+                # Check if ANY pixel is violet (at least one pixel)
+                has_violet = np.any(violet_mask > 0)
+
+                if has_violet:
+                    retained_patches.append(patch_rgb)
+                    retained_labels.append(y[n])
+                else:
+                    discarded_patches.append(patch_rgb)
+                    discarded_labels.append(y[n])
+
+    # Convert lists to numpy arrays
+    retained_patches = np.array(retained_patches) if retained_patches else np.empty((0, patch_size, patch_size, 3))
+    retained_labels = np.array(retained_labels) if retained_labels else np.empty((0, y.shape[1]))
+    discarded_patches = np.array(discarded_patches) if discarded_patches else np.empty((0, patch_size, patch_size, 3))
+    discarded_labels = np.array(discarded_labels) if discarded_labels else np.empty((0, y.shape[1]))
+
+    return retained_patches, retained_labels, discarded_patches, discarded_labels
+
+
+def train(
+        model,
+        X_tr,
+        y_tr,
+        X_val,
+        y_val,
+        epochs,
+        max_iter,
+        batch_size,
+        lr,
+        prune_and_regrow_stride,
+        test_stride,
+        patience,
+        rho0,
+        microbatch_size
+):
+    def data_generator(X, y, batch_size):
+        for i in range(0, len(X), batch_size):
+            yield X[i:i + batch_size], y[i:i + batch_size]
+
+    optimizer = keras.optimizers.Adam(learning_rate=lr)
+    loss_fn = keras.losses.CategoricalCrossentropy(from_logits=False)
+
+    it = 0
+    best_stride_loss = float('inf')
+    patience_counter = 0
+    total_stride_loss = 0
+    # conta il numero di iterazioni dall'ultimo test
+    stride_loss_count = 0
+    num_tests = 0
+
+    for epoch in range(epochs):
+        print(f"\nEpoch {epoch + 1}")
+
+        # Create fresh dataset for each epoch
+        with tf.device('/cpu:0'):
+            dataset = tf.data.Dataset.from_generator(
+                lambda: data_generator(X_tr, y_tr, batch_size),
+                output_signature=(
+                    tf.TensorSpec(shape=(None,) + X_tr.shape[1:], dtype=X_tr.dtype),
+                    tf.TensorSpec(shape=(None,) + y_tr.shape[1:], dtype=y_tr.dtype)
+                )
+            )
+
+        for step, (x_batch, y_batch) in enumerate(dataset):
+            # calcolo loss_val
+            if microbatch_size is None:
+                with tf.GradientTape() as tape:
+                    preds = model(x_batch, training=True)
+                    micro_loss = loss_fn(y_batch, preds)
+                grads = tape.gradient(micro_loss, model.trainable_variables)
+                optimizer.apply_gradients(zip(grads, model.trainable_variables))
+                loss_val = micro_loss.numpy()
+            else:
+                microbatches = tf.data.Dataset.from_tensor_slices((x_batch, y_batch)).batch(microbatch_size)
+                accum_grads = [tf.zeros_like(var) for var in model.trainable_variables]
+                total_micro_loss = 0.0
+                num_microbatches = 0
+
+                for x_micro, y_micro in microbatches:
+                    with tf.GradientTape() as tape:
+                        preds = model(x_micro, training=True)
+                        micro_loss = loss_fn(y_micro, preds)
+                    grads = tape.gradient(micro_loss, model.trainable_variables)
+                    accum_grads = [acc_g + g for acc_g, g in zip(accum_grads, grads)]
+                    total_micro_loss += micro_loss.numpy()
+                    num_microbatches += 1
+
+                avg_grads = [g / num_microbatches for g in accum_grads]
+                optimizer.apply_gradients(zip(avg_grads, model.trainable_variables))
+                loss_val = total_micro_loss / num_microbatches
+
+
+            total_stride_loss += loss_val
+            stride_loss_count +=1
+            it += 1
+
+            print(f"E: {epoch}, TS:{num_tests}, BL: {best_stride_loss}, Step {it}, Loss: {loss_val}")
+            with open("training_log.txt", 'a') as f:
+                f.write(f"{loss_val}\n")
+
+            #print(f"Peak Memory: {tf.config.experimental.get_memory_info('CPU:0')['peak'] / 1024 ** 2:.1f} MB")
+
+            if it % prune_and_regrow_stride == 0:
+                rho = rho0 ** (int(it / prune_and_regrow_stride))
+                print("phi:", int(model.num_active_weights() * rho))
+                if int(model.num_active_weights() * rho) > len(model.sparse_tensors):
+                    print("Prune & Regrow")
+                    model.prune_and_regrow(rho, optimizer)
+                    optimizer = keras.optimizers.Adam(learning_rate=float(optimizer.learning_rate.numpy()))
+                    best_stride_loss = float('inf')
+                    patience_counter = 0
+                    total_stride_loss = 0
+                    stride_loss_count = 0
+                else:
+                    print("Prune & Regrow Aborted")
+
+            if stride_loss_count == test_stride:
+                num_tests += 1
+                acc_tr = -1
+                acc_val = test2(model, X_val, y_val)
+                print(f"Step {it}, Accuracy Train: {acc_tr:.3f},  Accuracy Val: {acc_val:.3f}")
+
+                avg_stride_loss = total_stride_loss/stride_loss_count
+                total_stride_loss = 0
+                stride_loss_count = 0
+
+                print(f"Avg Stride Loss: {avg_stride_loss}")
+
+                if avg_stride_loss < best_stride_loss:
+                    best_stride_loss = avg_stride_loss
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= patience:
+                        new_lr = optimizer.learning_rate.numpy() * 0.5
+                        optimizer.learning_rate.assign(new_lr)
+                        print(f"Reducing LR to {new_lr:.6f}")
+                        patience_counter = 0
+
+                print(f"Patience counter: {patience_counter}")
+
+
+            if it == max_iter:
+                print("max iter reached")
+                return
+
+
+
+
+
+def main():
+    file_list = ['./runs/r18.txt','./runs/r19.txt']
+    plot_overlapped_curves(file_list,start=0)
     exit()
 
-    X_train, y_train = load_bloodmnist_subset(); X_val = X_train; y_val = y_train
+    X_train, y_train = load_bloodmnist_subset()
+    print(X_train.shape)
+    X_val = X_train
+    y_val = y_train
     #(X_train, y_train), (X_test, y_test), (X_val, y_val) = load_bloodmnist_224()
 
-    model = ResNet50_sparse2(sparsity= 0.8, recompute = False)
+    #X_train, y_train = extract_patches(X_train, y_train, patch_size=32, stride=16, center_radius=64)
+    #16->x96
+    #32->x24
+    X_train, y_train, discarded_patches, discarded_labels = extract_violet_patches(X_train, y_train, patch_size=32, stride=32)
+    #X_val, y_val, discarded_patches, discarded_labels = extract_violet_patches(X_val, y_val, patch_size=32, stride=16);
+    print(X_train.shape)
 
-    #model = MobileNetTF(sparsity=0.8, recompute_gradient=False)
+
+    for i in range(len(X_train)):
+        show_image(X_train,y_train,index = i)
+    exit()
+
+    #TODO: controllare
+    indices = np.random.permutation(len(X_train))
+    X_train = X_train[indices]
+    y_train = y_train[indices]
+
+    # Set validation data
+    #X_val = X_train
+    #y_val = y_train
+
+
+
+
+
+
+
+    #model = ResNet50_sparse2(sparsity= 0.8, recompute = False)
+
+    model = MobileNetTF(sparsity=0)
 
     max_iter = 130000
     train(model,
@@ -1141,13 +1440,13 @@ def main():
            y_train,
            X_val,
            y_val,
-           epochs = 100,
+           epochs = 1000,
            max_iter = max_iter,
            batch_size = 1,
            lr = 0.001,
            patience = 3,
-           prune_and_regrow_stride = 1,
-           test_stride = 10000,
+           prune_and_regrow_stride = np.inf,
+           test_stride = 2,
            rho0 = 0.5,
            microbatch_size = None
            )

@@ -2,7 +2,6 @@ import numpy as np
 import tensorflow as tf
 from functools import reduce
 import math
-import funzioni
 import v4
 from tensorflow.python.ops.gen_sparse_ops import sparse_reorder, sparse_tensor_dense_mat_mul, sparse_to_dense
 

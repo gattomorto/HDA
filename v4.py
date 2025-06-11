@@ -12,7 +12,6 @@ import tensorflow as tf
 #from keras.src.backend.tensorflow.sparse import sparse_to_dense
 from tensorflow.python.ops.gen_sparse_ops import sparse_reorder, sparse_tensor_dense_mat_mul, sparse_to_dense
 import conv
-import funzioni
 #from memory_profiler import profile
 #from memory_profiler import memory_usage
 
