@@ -1395,6 +1395,11 @@ def test2(model, X, y, patch_size=32, stride=16, batch_size=32):
     accuracy = np.mean(predicted_classes[has_violet] == true_classes[has_violet])
     return accuracy
 
+def test3(model, X, y, batch_size=2000):
+    for i in range(100000000):
+        j = 0
+        j = j+1
+
 
 def sparse_to_dense_conv2d(input, sp_filter, stride=1, padding='SAME'):
     #dense_filter = tf.sparse.to_dense(sp_filter.to_tf_sparse())
@@ -1560,32 +1565,33 @@ def extract_violet_patches(X, y, patch_size, stride):
 
     return retained_patches, retained_labels, discarded_patches, discarded_labels
 
+def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch_size, lr,
+          prune_and_regrow_frequency, test_frequency, patience, rho0, microbatch_size):
 
-def train(model, X_tr, y_tr, X_val, y_val, epochs, max_iter, max_time ,batch_size, lr, prune_and_regrow_stride, test_stride, patience, rho0, microbatch_size):
     def data_generator(X, y, batch_size):
         for i in range(0, len(X), batch_size):
             yield X[i:i + batch_size], y[i:i + batch_size]
 
+    #log_file1 = open("training_log1.txt", 'a')
+    log_file2 = open("training_log2.txt", 'a')
     optimizer = keras.optimizers.Adam(learning_rate=lr)
     loss_fn = keras.losses.CategoricalCrossentropy(from_logits=False)
 
-    # Timer initialization
     training_start_time = time.time()
     accumulated_elapsed_time = 0.0
+    last_test_training_time = 0.0
 
     it = 0
-    best_stride_loss = float('inf')
+    best_avg_loss = float('inf')
     patience_counter = 0
     total_stride_loss = 0
-    # conta il numero di iterazioni dall'ultimo test
     stride_loss_count = 0
     num_tests = 0
     best_acc_val = 0
 
-    for epoch in range(epochs):
-        print(f"\nEpoch {epoch + 1}")
+    for epoch in range(max_epochs):
+        #print(f"\nEpoch {epoch + 1}")
 
-        # Create fresh dataset for each epoch
         with tf.device('/cpu:0'):
             dataset = tf.data.Dataset.from_generator(
                 lambda: data_generator(X_tr, y_tr, batch_size),
@@ -1593,10 +1599,10 @@ def train(model, X_tr, y_tr, X_val, y_val, epochs, max_iter, max_time ,batch_siz
                     tf.TensorSpec(shape=(None,) + X_tr.shape[1:], dtype=X_tr.dtype),
                     tf.TensorSpec(shape=(None,) + y_tr.shape[1:], dtype=y_tr.dtype)
                 )
-            )
-        # TODO: togliere step?
-        for step, (x_batch, y_batch) in enumerate(dataset):
-            # calcolo loss_val
+            ).repeat().prefetch(tf.data.AUTOTUNE).cache()
+            #TODO: repeat().prefetch(tf.data.AUTOTUNE).cache() potrebbe consumare piu memoria
+
+        for x_batch, y_batch in dataset:
             if microbatch_size is None:
                 with tf.GradientTape() as tape:
                     preds = model(x_batch, training=True)
@@ -1627,59 +1633,52 @@ def train(model, X_tr, y_tr, X_val, y_val, epochs, max_iter, max_time ,batch_siz
             total_stride_loss += loss_val
             stride_loss_count += 1
 
-            # Calculate current elapsed time
+            # Recalculate training-only time
             current_elapsed = accumulated_elapsed_time + (time.time() - training_start_time)
-            print(
-                f"E: {epoch}, Num Tests: {num_tests}, lr: {optimizer.learning_rate.numpy()},  Best Loss: {best_stride_loss}, Best Acc: {best_acc_val}, Step {it}, Loss: {loss_val}, Elapsed: {current_elapsed:.1f}s")
-            with open("training_log.txt", 'a') as f:
-                f.write(f"{current_elapsed} {loss_val} {best_acc_val}\n")
+            '''if it % 1 == 0:
+                #print(f"E: {epoch}, Num Tests: {num_tests}, lr: {optimizer.learning_rate.numpy()},  Best Loss: {best_avg_loss}, Best Acc: {best_acc_val}, Step {it}, Loss: {loss_val}, Elapsed: {current_elapsed}")
+                log_file1.write(f"{current_elapsed} {loss_val} {best_acc_val}\n")
+                log_file1.flush()'''
 
-            if tf.config.list_physical_devices('GPU'):
-                print(f"Peak Memory: {tf.config.experimental.get_memory_info('GPU:0')['peak'] / 1024 ** 2:.1f} MB")
-            else:
-                print(f"Peak Memory: {tf.config.experimental.get_memory_info('CPU:0')['peak'] / 1024 ** 2:.1f} MB")
-
-
-            if it % prune_and_regrow_stride == 0:
-                rho = rho0 ** (int(it / prune_and_regrow_stride))
+            if it % prune_and_regrow_frequency == 0:
+                rho = rho0 ** (int(it / prune_and_regrow_frequency))
                 print("phi:", int(model.num_active_weights() * rho))
                 if int(model.num_active_weights() * rho) > len(model.sparse_tensors):
                     print("Prune & Regrow")
                     model.prune_and_regrow(rho, optimizer)
                     optimizer = keras.optimizers.Adam(learning_rate=float(optimizer.learning_rate.numpy()))
-                    best_stride_loss = float('inf')
+                    best_avg_loss = float('inf')
                     patience_counter = 0
                     total_stride_loss = 0
                     stride_loss_count = 0
                 else:
                     print("Prune & Regrow Aborted")
 
-            if stride_loss_count == test_stride:
-                num_tests += 1
-                acc_tr = -1
-
-                # Freeze timer before test2 call
-                accumulated_elapsed_time += (time.time() - training_start_time)
+            current_elapsed = accumulated_elapsed_time + (time.time() - training_start_time)
+            if current_elapsed - last_test_training_time >= test_frequency:
+                # Stop training clock
                 test_start_time = time.time()
+                accumulated_elapsed_time += (test_start_time - training_start_time)
 
-                #acc_val = test(model, X_val, y_val,batch_size = 32)
-                acc_val = test2(model, X_val, y_val,batch_size = 32)
-
-                # Unfreeze timer after test2 call
+                acc_val = test2(model, X_val, y_val, batch_size=32)
+                #acc_val = -1
                 test_duration = time.time() - test_start_time
+
+                # Update test time and resume training clock
+                last_test_training_time += test_frequency
                 training_start_time = time.time()
 
-                print(
-                    f"Step {it}, Accuracy Train: {acc_tr:.3f},  Accuracy Val: {acc_val:.3f}, Test Duration: {test_duration:.1f}s")
+
+                num_tests += 1
 
                 avg_stride_loss = total_stride_loss / stride_loss_count
                 total_stride_loss = 0
                 stride_loss_count = 0
 
-                print(f"Avg Stride Loss: {avg_stride_loss}")
+                #print(f"Avg Stride Loss: {avg_stride_loss}")
 
-                if avg_stride_loss < best_stride_loss:
-                    best_stride_loss = avg_stride_loss
+                if avg_stride_loss < best_avg_loss:
+                    best_avg_loss = avg_stride_loss
                     patience_counter = 0
                 else:
                     patience_counter += 1
@@ -1693,28 +1692,38 @@ def train(model, X_tr, y_tr, X_val, y_val, epochs, max_iter, max_time ,batch_siz
                     best_acc_val = acc_val
 
                 print(f"Patience counter: {patience_counter}")
+                print(f"Time Step: {current_elapsed}, Best Accuracy: {best_acc_val}, Accuracy: {acc_val}, it: {it}, Loss: {loss_val}, Best Avg Loss: {best_avg_loss}, Avg Loss: {avg_stride_loss} lr: {optimizer.learning_rate.numpy()}")
+                log_file2.write(f"{current_elapsed} {best_acc_val} {best_avg_loss} {avg_stride_loss}\n")
+                log_file2.flush()
 
             if it == max_iter:
                 print("max iter reached")
+                #log_file.close()
                 return
 
             if current_elapsed > max_time:
                 print("max time reached")
+                #log_file.close()
                 return
+
+    #log_file.close()
 
 
 def main():
 
-    file_list = ['./runs/r36.txt','./runs/r20.txt']
-    plot_overlapped_curves(file_list, start=0, flag= "acc")
+    file_list = ['./runs/r37.txt','./runs/r20.txt']
+    plot_overlapped_curves(file_list, start=0, flag= "loss")
     exit()
 
     if tf.config.list_physical_devices('GPU'):
       (X_train, y_train), (X_test, y_test), (X_val, y_val) = load_bloodmnist_224()
+      test_frequency = 60*2.5
+
     else:
         X_train, y_train = load_bloodmnist_subset()
         X_val = X_train
         y_val = y_train
+        test_frequency = 5
 
     #16->x96
     #32->x24
@@ -1731,29 +1740,15 @@ def main():
     exit()'''
 
 
-
     #model = ResNet50_sparse2(sparsity= 0.8, recompute = False)
     model = MobileNetTF(sparsity=0, recompute_gradient=False)
     #model = ResNet50_original()
     #model = ResNet50_sparse(sparsity = 0)
     #model = MobileNet_keras()
 
-    train(model,
-           X_train,
-           y_train,
-           X_val,
-           y_val,
-           epochs = 100000,
-           max_iter = 10000000,
-           max_time = 60*60,
-           batch_size = 32,
-           lr = 0.001,
-           patience = 3,
-           prune_and_regrow_stride = np.inf,
-           test_stride = 100,
-           rho0 = 0.5,
-           microbatch_size = None
-           )
+    train(model, X_train, y_train, X_val, y_val, max_epochs=100000, max_iter=10000000, max_time=60 * 60 * 2, batch_size=32,
+          lr=0.001, prune_and_regrow_frequency=np.inf, test_frequency=test_frequency, patience=3, rho0=0.5,
+          microbatch_size=None)
 
 if __name__ == '__main__':
     main()
