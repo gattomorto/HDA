@@ -459,7 +459,7 @@ class Prune(unittest.TestCase):
         #tot = 600 -- 60 posizioni libere -- 540 occupate
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
 
-        model.sparse_tensors = model._collect_sparse_tensors()
+        #model.sparse_tensors = model._collect_sparse_tensors()
 
         tot_pruned = model.prune(rho = 0.6)
         # W1: 21*0.6 = 12.6 -> 13 pruned
@@ -856,7 +856,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 1
 
-        model.sparse_tensors = model._collect_sparse_tensors()
+        #model.sparse_tensors = model._collect_sparse_tensors()
 
         #tot liberi = 85
         model.regrow(to_regrow=80)
@@ -895,7 +895,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 20
 
-        model.sparse_tensors = model._collect_sparse_tensors()
+        #model.sparse_tensors = model._collect_sparse_tensors()
 
         #tot liberi = 85
         model.regrow(to_regrow=81)
@@ -930,7 +930,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 1
 
-        model.sparse_tensors = model._collect_sparse_tensors()
+        #model.sparse_tensors = model._collect_sparse_tensors()
 
         model.regrow(to_regrow=81)
 
@@ -964,7 +964,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 1
 
-        model.sparse_tensors = model._collect_sparse_tensors()
+        #model.sparse_tensors = model._collect_sparse_tensors()
 
         model.regrow(to_regrow=128)
 
@@ -999,7 +999,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 0
 
-        model.sparse_tensors = model._collect_sparse_tensors()
+        #model.sparse_tensors = model._collect_sparse_tensors()
 
         model.regrow(to_regrow=128)
 
@@ -1034,7 +1034,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 0
 
-        model.sparse_tensors = model._collect_sparse_tensors()
+        #model.sparse_tensors = model._collect_sparse_tensors()
 
         #tot liberi = 173
 
@@ -1071,7 +1071,7 @@ class Regrow(unittest.TestCase):
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
         model.W3.mean_momentum = 0
 
-        model.sparse_tensors = model._collect_sparse_tensors()
+        #model.sparse_tensors = model._collect_sparse_tensors()
 
         #tot liberi = 173
 
@@ -1105,7 +1105,7 @@ class Prune_and_Regrow(unittest.TestCase):
         model.fc2_w = models.SparseTensor([128, 10], 0.5, name="fc2_w")
         model.fc2_b = tf.Variable(tf.zeros([10]), name="fc2_b")
 
-        model.sparse_tensors = model._collect_sparse_tensors()
+        #model.sparse_tensors = model._collect_sparse_tensors()
 
         def new_call(self, *args, **kwargs):
             x = args[0]
@@ -1180,7 +1180,7 @@ class Prune_and_Regrow(unittest.TestCase):
         #tot = 600 -- 60 posizioni libere -- 540 occupate
         model.W3 = models.SparseTensor([30,20],0.1,name = "W3")
 
-        model.sparse_tensors = model._collect_sparse_tensors()
+        #model.sparse_tensors = model._collect_sparse_tensors()
 
         tot_pruned = model.prune(rho = 0.6)
         # W1: 21*0.6 = 12.6 -> 13 pruned
