@@ -290,6 +290,11 @@ class SparseModel(tf.Module):
 
     def num_inactive_weights(self):
         return self.num_weights() - self.num_active_weights()
+
+    def is_rho_large_enough(self,rho):
+        print("phi:", int(self.num_active_weights() * rho))
+        return int(self.num_active_weights() * rho) > len(self.sparse_tensors())
+
 class SparseTensor(tf.Module):
     def __init__(self, *args,  name=None):
         def random_indices(shape, sparsity):
@@ -308,7 +313,6 @@ class SparseTensor(tf.Module):
         self.num_pruned = 0
         self.num_regrown = 0
         self.num_active_weights_before_pruning=0
-        #TODO: indices and shapes tf variables?
         if len(args) == 2 and isinstance(args[0], list) and isinstance(args[1], (float,int)):
             shape, sparsity = args
             self.sparsity = sparsity
@@ -316,14 +320,14 @@ class SparseTensor(tf.Module):
             self.indices, nnz = random_indices(shape, sparsity)
             #
             if len(shape) == 4:
-                fan_in = shape[0] * shape[1] * shape[2]
-                stddev = np.sqrt(2.0 / fan_in)
-                initializer = keras.initializers.TruncatedNormal(stddev=stddev)
-
                 '''fan_in = shape[0] * shape[1] * shape[2]
+                stddev = np.sqrt(2.0 / fan_in)
+                initializer = keras.initializers.TruncatedNormal(stddev=stddev)'''
+
+                fan_in = shape[0] * shape[1] * shape[2]
                 fan_out = shape[3]  # output channels
                 limit = np.sqrt(6.0 / (fan_in + fan_out))  # Xavier/Glorot formula
-                initializer = keras.initializers.RandomUniform(minval=-limit, maxval=limit)'''
+                initializer = keras.initializers.RandomUniform(minval=-limit, maxval=limit)
             elif len(shape) == 2:
 
                 fan_in = shape[0]
@@ -478,8 +482,7 @@ class SparseTensor(tf.Module):
     def tensor_sparsity(self):
         return self.num_inactive_weights()/self.num_weights()
 
-# resnet checkpointing, con prune & regrow
-class ResNet50_sparse2(SparseModel):
+class ResNet(SparseModel):
     class ConvBlock(tf.Module):
         def __init__(self, sparsity, in_channels, filters, stride=1, conv_shortcut=True, recompute=False, name=None):
             super().__init__(name=name)
@@ -536,11 +539,11 @@ class ResNet50_sparse2(SparseModel):
             self.blocks = []
 
             self.blocks.append(
-                ResNet50_sparse2.ConvBlock(sparsity, in_channels, filters, stride=stride1, conv_shortcut=True, recompute=recompute, name="block1")
+                ResNet.ConvBlock(sparsity, in_channels, filters, stride=stride1, conv_shortcut=True, recompute=recompute, name="block1")
             )
             for i in range(2, blocks + 1):
                 self.blocks.append(
-                    ResNet50_sparse2.ConvBlock(sparsity, 4 * filters, filters, stride=1, conv_shortcut=False, recompute=recompute, name=f"block{i}")
+                    ResNet.ConvBlock(sparsity, 4 * filters, filters, stride=1, conv_shortcut=False, recompute=recompute, name=f"block{i}")
                 )
 
         def __call__(self, x, training=False):
@@ -559,10 +562,10 @@ class ResNet50_sparse2(SparseModel):
 
         self.pool = lambda x: tf.nn.max_pool2d(x, ksize=3, strides=2, padding="SAME")
 
-        self.stage2 = ResNet50_sparse2.ResNetStack(64, 64, 3, stride1=1, sparsity=sparsity, recompute=recompute, name="conv2")
-        self.stage3 = ResNet50_sparse2.ResNetStack(256, 128, 4, stride1=2, sparsity=sparsity, recompute=recompute, name="conv3")
-        self.stage4 = ResNet50_sparse2.ResNetStack(512, 256, 6, stride1=2, sparsity=sparsity, recompute=recompute, name="conv4")
-        self.stage5 = ResNet50_sparse2.ResNetStack(1024, 512, 3, stride1=2, sparsity=sparsity, recompute=recompute, name="conv5")
+        self.stage2 = ResNet.ResNetStack(64, 64, 3, stride1=1, sparsity=sparsity, recompute=recompute, name="conv2")
+        self.stage3 = ResNet.ResNetStack(256, 128, 4, stride1=2, sparsity=sparsity, recompute=recompute, name="conv3")
+        self.stage4 = ResNet.ResNetStack(512, 256, 6, stride1=2, sparsity=sparsity, recompute=recompute, name="conv4")
+        self.stage5 = ResNet.ResNetStack(1024, 512, 3, stride1=2, sparsity=sparsity, recompute=recompute, name="conv5")
 
         self.fc_w = SparseTensor([2048, num_classes], sparsity, name="fc_w_M")
         self.fc_b = tf.Variable(tf.zeros([num_classes]), name="fc_b")
@@ -598,10 +601,7 @@ class ResNet50_sparse2(SparseModel):
             return head(x)
 
 
-
-# mobile net 224, check, prune and regrow
-'''
-class MobileNetTF(tf.Module):
+class MobileNet224(SparseModel):
     class ConvBlock(tf.Module):
         def __init__(self, in_channels, out_channels, stride, sparsity, recompute_gradient=False, name=None):
             super().__init__(name=name)
@@ -652,25 +652,24 @@ class MobileNetTF(tf.Module):
         self.blocks = []
 
         # Define all blocks with recompute flag
-        self.blocks.append(MobileNetTF.ConvBlock(3, 32, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="conv1"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(32, 64, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw1"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(64, 128, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw2"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 128, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw3"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 256, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw4"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 256, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw5"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 512, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw6"))
+        self.blocks.append(MobileNet224.ConvBlock(3, 32, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="conv1"))
+        self.blocks.append(MobileNet224.DepthwiseConvBlock(32, 64, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw1"))
+        self.blocks.append(MobileNet224.DepthwiseConvBlock(64, 128, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw2"))
+        self.blocks.append(MobileNet224.DepthwiseConvBlock(128, 128, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw3"))
+        self.blocks.append(MobileNet224.DepthwiseConvBlock(128, 256, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw4"))
+        self.blocks.append(MobileNet224.DepthwiseConvBlock(256, 256, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw5"))
+        self.blocks.append(MobileNet224.DepthwiseConvBlock(256, 512, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw6"))
 
         for i in range(5):
-            self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 512, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name=f"dw7_{i}"))
+            self.blocks.append(MobileNet224.DepthwiseConvBlock(512, 512, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name=f"dw7_{i}"))
 
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 1024, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw8"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(1024, 1024, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw9"))
+        self.blocks.append(MobileNet224.DepthwiseConvBlock(512, 1024, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw8"))
+        self.blocks.append(MobileNet224.DepthwiseConvBlock(1024, 1024, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw9"))
 
         self.global_pool = keras.layers.GlobalAveragePooling2D()
         self.dense_weights = SparseTensor([1024, num_classes], sparsity, name="dense")
         self.dense_bias = tf.Variable(tf.zeros([num_classes]), trainable=True, name="dense_bias")
 
-        self.sparse_tensors = self._collect_sparse_tensors()
 
     def __call__(self, x, training=False):
         for block in self.blocks:
@@ -686,267 +685,8 @@ class MobileNetTF(tf.Module):
         else:
             return head(x)
 
-    def __str__(self):
-        lines = []
-        lines.append("ResNet50_sparse2 Model Summary")
-        lines.append("=" * 80)
 
-        # Table Header
-        lines.append(f"{'Layer Name':<30} {'Momentum Contribution':>25} {'Sparsity':>10} {'Active / Total':>15}")
-        lines.append("-" * 80)
-
-        self.update_relative_momentum_contributions(self.sparse_tensors)
-
-        for tensor in self.sparse_tensors:
-            active = tensor.num_active_weights()
-            total = tensor.num_weights()
-            sparsity = tensor.tensor_sparsity()
-            momentum_pct = f"{tensor.relative_momentum_contribution:.1%}"
-            sparsity_str = f"{sparsity:.1%}"
-
-            lines.append(
-                f"{tensor.name:<30} {momentum_pct:>25} {sparsity_str:>10} {f'{active:,} / {total:,}':>15}"
-            )
-
-        lines.append("-" * 80)
-
-        # Model-level summary
-        model_sparsity = self.model_sparsity()
-        model_active = self.num_active_weights()
-        model_total = self.num_weights()
-
-        lines.append(f"{'Overall Model Sparsity:':<30} {model_sparsity:.1%}")
-        lines.append(f"{'Total Active / Total Weights:':<30} {model_active:,} / {model_total:,}")
-
-        lines.append("=" * 80)
-        return "\n".join(lines)
-
-    def _collect_sparse_tensors(self):
-        prunable = []
-        def collect_sparse(module):
-            # Include attributes of this module
-            for attr_name in dir(module):
-                attr = getattr(module, attr_name)
-                if isinstance(attr, SparseTensor):
-                    prunable.append(attr)
-        collect_sparse(self)
-        for submodule in self.submodules:
-            collect_sparse(submodule)
-        return prunable
-
-    def prune(self, rho):
-        prunable = self.sparse_tensors
-        tot_pruned = 0
-        for i, tensor in enumerate(prunable):
-            pruned_i = tensor.prune(rho=rho)
-            tot_pruned = tot_pruned + pruned_i
-        return tot_pruned
-
-    def update_relative_momentum_contributions(self, tensors):
-        total = sum(t.mean_momentum for t in tensors)
-        if total == 0:
-            equal_share = 1.0 / len(tensors)
-            for t in tensors:
-                t.relative_momentum_contribution = equal_share
-        else:
-            for t in tensors:
-                t.relative_momentum_contribution = t.mean_momentum / total
-
-    def update_mean_momentums(self, optimizer):
-        for sparse_tensor in self.sparse_tensors:
-            w = sparse_tensor.values
-            idx = optimizer._get_variable_index(w)
-            momentum_tensor = optimizer._momentums[idx]
-            sparse_tensor.mean_momentum = tf.reduce_mean(tf.abs(momentum_tensor))
-
-    def regrow(self, to_regrow):
-
-        # se vuoi capire perchè esiste regrowth_residual pensa al caso in cui to_regrow = 1
-        if to_regrow > self.num_inactive_weights():
-            raise ValueError(
-                f"Cannot regrow {to_regrow} elements. "
-                f"Only {self.num_inactive_weights()} positions available."
-            )
-
-        tot_regrown = 0
-        remaining_to_allocate  = to_regrow
-        active_tensors = self.sparse_tensors
-
-        while remaining_to_allocate  != 0:
-            self.update_relative_momentum_contributions(active_tensors)
-            total_deficit = 0
-            unsaturated_tensors = []
-            for t in active_tensors:
-                expected_regrow = int(remaining_to_allocate  * t.relative_momentum_contribution)
-
-                actual_regrow = t.regrow(requested_growth=expected_regrow)
-                tot_regrown = tot_regrown + actual_regrow
-                deficit = expected_regrow - actual_regrow
-                total_deficit = total_deficit + deficit
-                if not t.is_saturated():
-                    unsaturated_tensors.append(t)
-
-            active_tensors = unsaturated_tensors
-            remaining_to_allocate  = total_deficit
-
-        residual = to_regrow - tot_regrown
-        for t in active_tensors:
-            regrown = t.regrow(residual)
-            residual = residual-regrown
-            if residual == 0:
-                return
-
-    def prune_and_regrow(self,rho,optimizer):
-        print(f"rho: {rho}")
-        self.update_mean_momentums(optimizer)
-        self.reset_prune_and_regrow_stats()
-        num_pruned = self.prune(rho)
-        #print(self.prune_summary())
-        self.regrow(num_pruned)
-        #print(self.regrow_summary())
-
-    def reset_prune_and_regrow_stats(self):
-        for t in self.sparse_tensors:
-            t.reset_prune_and_regrow_stats()
-
-    def num_pruned(self):
-        tot_pruned = 0
-        for t in self.sparse_tensors:
-            tot_pruned = tot_pruned + t.num_pruned
-        return tot_pruned
-
-    def num_regrown(self):
-        tot_regrown = 0
-        for t in self.sparse_tensors:
-            tot_regrown = tot_regrown + t.num_regrown
-        return tot_regrown
-
-    def prune_summary(self):
-        """Returns a detailed summary of pruning statistics for all sparse tensors.
-
-        Returns:
-            str: Formatted string containing pruning statistics for each tensor and global summary.
-        """
-
-        sep_length = 81
-
-        lines = []
-        lines.append("Pruning Summary")
-        lines.append("=" * sep_length)
-
-        # Table header
-        lines.append(
-            f"{'Layer Name':<15} {'Active/Total (b)':>22} {'Pruned':>8} {'Active/Total (a)':>22} {'Sparsity':>10}")
-        lines.append("-" * sep_length)
-
-        # Update momentum contributions
-        self.update_relative_momentum_contributions(self.sparse_tensors)
-
-        for tensor in self.sparse_tensors:
-            active = tensor.num_active_weights()
-            total = tensor.num_weights()
-            pruned = tensor.num_pruned
-            active_before_pruning = active + pruned
-            sparsity = tensor.tensor_sparsity()
-
-            lines.append(
-                f"{tensor.name:<15} {f'{active_before_pruning:,}/{total:,}':>22} {pruned:>8} "
-                f"{f'{active:,}/{total:,}':>22} {f'{sparsity:.1%}':>10}"
-            )
-
-        lines.append("-" * sep_length)
-
-        # Right-aligned global summary
-        def right_align(label, value):
-            left = f"{label}"
-            right = f"{value}"
-            total_width = sep_length
-            return f"{left}{' ' * (total_width - len(left) - len(right))}{right}"
-
-        lines.append(right_align("Total Pruned Weights: ", f"{self.num_pruned():,}"))
-        lines.append(right_align("Model Sparsity: ", f"{self.model_sparsity():.1%}"))
-        lines.append(
-            right_align("Total Active/Total Weights: ", f"{self.num_active_weights():,}/{self.num_weights():,}"))
-
-        lines.append("=" * sep_length)
-        return "\n".join(lines)
-
-    def regrow_summary(self):
-        """Returns a detailed summary of regrowth statistics for all sparse tensors.
-
-        Returns:
-            str: Formatted string containing regrowth statistics for each tensor and global summary.
-        """
-        sep_length = 88
-        lines = []
-        lines.append("Regrowth Summary")
-        lines.append("=" * sep_length)
-
-        # Table Header
-        lines.append(
-            f"{'Layer Name':<15} {'Momentum':>10} {'Active/Total (b)':>20} "
-            f"{'Regrown':>8} {'Active/Total (a)':>20} {'Sparsity':>10}"
-        )
-        lines.append("-" * sep_length)
-
-        total_regrown = 0
-
-        # Update momentum contributions
-        self.update_relative_momentum_contributions(self.sparse_tensors)
-
-        for tensor in self.sparse_tensors:
-            active_after = tensor.num_active_weights()
-            total = tensor.num_weights()
-            regrown = tensor.num_regrown
-            active_before = active_after - regrown
-            sparsity = tensor.tensor_sparsity()
-            momentum_pct = f"{tensor.relative_momentum_contribution:.1%}"
-
-            lines.append(
-                f"{tensor.name:<15} {momentum_pct:>10} {f'{active_before:,}/{total:,}':>20} "
-                f"{regrown:>8} {f'{active_after:,}/{total:,}':>20} {f'{sparsity:.1%}':>10}"
-            )
-            total_regrown += regrown
-
-        lines.append("-" * sep_length)
-
-        # Right-aligned global summary
-        def right_align(label, value):
-            left = f"{label}"
-            right = f"{value}"
-            total_width = sep_length
-            return f"{left}{' ' * (total_width - len(left) - len(right))}{right}"
-
-        lines.append(right_align("Total Regrown Weights: ", f"{total_regrown:,}"))
-        lines.append(right_align("Model Sparsity: ", f"{self.model_sparsity():.1%}"))
-        lines.append(
-            right_align("Total Active/Total Weights: ", f"{self.num_active_weights():,}/{self.num_weights():,}"))
-
-        lines.append("=" * sep_length)
-        return "\n".join(lines)
-
-    def model_sparsity(self):
-        return self.num_inactive_weights()/self.num_weights()
-
-    def num_active_weights(self):
-        num_active_weights = 0
-        for t in self.sparse_tensors:
-            num_active_weights = num_active_weights + t.num_active_weights()
-        return num_active_weights
-
-    def num_weights(self):
-        num_weights = 0
-        for t in self.sparse_tensors:
-            num_weights = num_weights + t.num_weights()
-        return num_weights
-
-    def num_inactive_weights(self):
-        return self.num_weights() - self.num_active_weights()
-'''
-
-# mobile net 32, sparse, check, prune&regrow
-'''
-class MobileNetTF(SparseModel):
+class MobileNet32(SparseModel):
     class ConvBlock(tf.Module):
         def __init__(self, in_channels, out_channels, stride, sparsity, recompute_gradient=False, name=None):
             super().__init__(name=name)
@@ -987,20 +727,16 @@ class MobileNetTF(SparseModel):
         self.blocks = []
 
         # Blocks for 32x32 input resolution
-        self.blocks.append(MobileNetTF.ConvBlock(3, 32, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="conv1"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(32, 64, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw1"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(64, 128, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw2"))  # 32→16
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 128, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw3"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 256, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw4"))  # 16→8
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 256, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw5"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 512, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw6"))  # 8→4
+        self.blocks.append(MobileNet32.ConvBlock(3, 32, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="conv1"))
+        self.blocks.append(MobileNet32.DepthwiseConvBlock(32, 64, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw1"))
+        self.blocks.append(MobileNet32.DepthwiseConvBlock(64, 128, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw2"))  # 32→16
+        self.blocks.append(MobileNet32.DepthwiseConvBlock(128, 128, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw3"))
+        self.blocks.append(MobileNet32.DepthwiseConvBlock(128, 256, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw4"))  # 16→8
+        self.blocks.append(MobileNet32.DepthwiseConvBlock(256, 256, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw5"))
+        self.blocks.append(MobileNet32.DepthwiseConvBlock(256, 512, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw6"))  # 8→4
 
-        # Optional repeats (reduced for CIFAR-like input)
-        # for i in range(2):
-        #     self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 512, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name=f"dw7_{i}"))
-
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 1024, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw8"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(1024, 1024, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw9"))
+        self.blocks.append(MobileNet32.DepthwiseConvBlock(512, 1024, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw8"))
+        self.blocks.append(MobileNet32.DepthwiseConvBlock(1024, 1024, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw9"))
 
         self.global_pool = keras.layers.GlobalAveragePooling2D()
         self.dense_weights = SparseTensor([1024, num_classes], sparsity, name="dense")
@@ -1015,76 +751,82 @@ class MobileNetTF(SparseModel):
             return tf.nn.softmax(x)
 
         return tf.recompute_grad(head)(x) if self.recompute else head(x)
-'''
 
-
-# mobile net 32, sparse
-class MobileNetTF(tf.Module):
+class MobileNet32_new(SparseModel):
     class ConvBlock(tf.Module):
-        def __init__(self, in_channels, out_channels, stride, sparsity, name=None):
+        def __init__(self, in_channels, out_channels, stride, sparsity, recompute_gradient=False, name=None):
             super().__init__(name=name)
             self.stride = stride
+            self.recompute = recompute_gradient
             self.conv_weights = SparseTensor([3, 3, in_channels, out_channels], sparsity, name="conv")
             self.bn = keras.layers.BatchNormalization()
-
         def __call__(self, x, training=False):
-            x = sparse_to_dense_conv2d(x, self.conv_weights, self.stride, padding="SAME")
-            x = self.bn(x, training=training)
-            return tf.nn.relu6(x)
+            def forward(x):
+                x = sparse_to_dense_conv2d(x, self.conv_weights, self.stride, padding="SAME")
+                x = self.bn(x, training=training)
+                return tf.nn.relu6(x)
+            return tf.recompute_grad(forward)(x) if self.recompute else forward(x)
 
     class DepthwiseConvBlock(tf.Module):
-        def __init__(self, in_channels, out_channels, stride, sparsity, name=None):
+        def __init__(self, in_channels, out_channels, stride, sparsity, recompute_gradient=False, name=None):
             super().__init__(name=name)
             self.strides = [1, stride, stride, 1]
+            self.recompute = recompute_gradient
             self.dw_weights = SparseTensor([3, 3, in_channels, 1], sparsity, name="dw_weights")
             self.pw_weights = SparseTensor([1, 1, in_channels, out_channels], sparsity, name="pw_weights")
             self.bn1 = keras.layers.BatchNormalization()
             self.bn2 = keras.layers.BatchNormalization()
 
         def __call__(self, x, training=False):
-            x = sparse_to_dense_depthwise_conv2d(x, self.dw_weights, self.strides, padding="SAME")
-            x = self.bn1(x, training=training)
-            x = tf.nn.relu6(x)
-            x = sparse_to_dense_conv2d(x, self.pw_weights, stride=1, padding="SAME")
-            x = self.bn2(x, training=training)
-            return tf.nn.relu6(x)
+            def forward(x):
+                x = sparse_to_dense_depthwise_conv2d(x, self.dw_weights, self.strides, padding="SAME")
+                x = self.bn1(x, training=training)
+                x = tf.nn.relu6(x)
+                x = sparse_to_dense_conv2d(x, self.pw_weights, stride=1, padding="SAME")
+                x = self.bn2(x, training=training)
+                return tf.nn.relu6(x)
+            return tf.recompute_grad(forward)(x) if self.recompute else forward(x)
 
-    def __init__(self, sparsity, num_classes=8, name=None):
+    def __init__(self, sparsity, num_classes=8, recompute_gradient=False, name=None):
         super().__init__(name=name)
+        self.recompute = recompute_gradient
         self.blocks = []
 
-        # Initial conv (stride=1 for 32x32 inputs)
-        self.blocks.append(MobileNetTF.ConvBlock(3, 32, stride=1, sparsity=sparsity, name="conv1"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(32, 64, stride=1, sparsity=sparsity, name="dw1"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(64, 128, stride=2, sparsity=sparsity, name="dw2"))  # 32x32 → 16x16
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 128, stride=1, sparsity=sparsity, name="dw3"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(128, 256, stride=2, sparsity=sparsity, name="dw4"))  # 16x16 → 8x8
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 256, stride=1, sparsity=sparsity, name="dw5"))
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(256, 512, stride=2, sparsity=sparsity, name="dw6"))  # 8x8 → 4x4
+        # Blocks for 32x32 input resolution
+        self.blocks.append(MobileNet32_new.ConvBlock(3, 32, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="conv1"))
+        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(32, 64, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw1"))
+        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(64, 128, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw2"))  # 32→16
+        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(128, 128, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw3"))
+        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(128, 256, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw4"))  # 16→8
+        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(256, 256, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw5"))
+        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(256, 512, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw6"))  # 8→4
 
-        #The receptive field grows gradually with depth — so more blocks are justified.
-        # Much fewer pixels to model. The receptive field saturates quickly.
-        # Optional: Remove some blocks to avoid over-downsampling
-        # for i in range(2):  # Fewer repeats for small inputs
-        #     self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 512, stride=1, sparsity=sparsity, name=f"dw7_{i}"))
 
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(512, 1024, stride=1, sparsity=sparsity, name="dw8"))  # Keep 4x4
-        self.blocks.append(MobileNetTF.DepthwiseConvBlock(1024, 1024, stride=1, sparsity=sparsity, name="dw9"))
+        for i in range(2):
+            self.blocks.append(MobileNet32_new.DepthwiseConvBlock(512, 512, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name=f"dw7_{i}"))
+
+
+        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(512, 1024, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw8"))
+        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(1024, 1024, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw9"))
 
         self.global_pool = keras.layers.GlobalAveragePooling2D()
         self.dense_weights = SparseTensor([1024, num_classes], sparsity, name="dense")
         self.dense_bias = tf.Variable(tf.zeros([num_classes]), trainable=True, name="dense_bias")
-
     def __call__(self, x, training=False):
         for block in self.blocks:
             x = block(x, training=training)
-        x = self.global_pool(x)
-        x = sparse_to_dense_matmul(x, self.dense_weights) + self.dense_bias
-        return tf.nn.softmax(x)
 
-###############################################################################
+        def head(x):
+            x = self.global_pool(x)
+            x = sparse_to_dense_matmul(x, self.dense_weights) + self.dense_bias
+            return tf.nn.softmax(x)
 
-def load_bloodmnist_224():
+        return tf.recompute_grad(head)(x) if self.recompute else head(x)
+
+
+#############################################################################################################
+
+def load_bloodmnist_224(patching):
     try:
         data = np.load("bloodmnist_224.npz")
     except:
@@ -1107,16 +849,37 @@ def load_bloodmnist_224():
     y_test = keras.utils.to_categorical(y_test)
     y_val = keras.utils.to_categorical(y_val)
 
+    if patching:
+        # 16->x96
+        # 32->x24
+        X_train, y_train, discarded_patches, discarded_labels = extract_violet_patches(X_train, y_train, patch_size=32, stride=32)
+        indices = np.random.permutation(len(X_train))
+        X_train = X_train[indices]
+        y_train = y_train[indices]
+
+        '''for i in range(len(discarded_patches)):
+            show_image(discarded_patches,discarded_labels,index = i)
+        exit()'''
+
     return (X_train, y_train), (X_test, y_test), (X_val, y_val)
 
-def load_bloodmnist_subset():
+def load_bloodmnist_subset(patching):
     data = np.load("bloodmnist_subset.npz")
     #data = np.load(f"{folder_path}/bloodmnist_224.npz")
 
     X = data['X']
     y = data['y']
     print(f"Loaded subset: {X.shape}, {y.shape}")
-    return X, y
+    Xc = X.copy()
+    yc = y.copy()
+
+    if patching:
+        X, y, discarded_patches, discarded_labels = extract_violet_patches(X, y, patch_size=32, stride=32)
+        indices = np.random.permutation(len(X))
+        X_train = X[indices]
+        y_train = y[indices]
+
+    return (X, y), (Xc, yc), (Xc, yc)
 
 # test standard
 def test(model, X, y, batch_size=2000):
@@ -1279,44 +1042,44 @@ def plot_overlapped_curves(file_list, start, flag):
     plt.show()
 
 
-def plot_column_from_files(file_paths, flag):
-    """
-    Plots data from multiple text files.
 
-    Each file is assumed to have 4 numeric columns.
-    Column 0 is the x-axis.
-    The y-axis is selected based on the `flag`:
-        flag = 1 -> plot column 1
-        flag = 2 -> plot column 2
-        flag = 3 -> plot column 3
+def plot_column_from_files(file_paths, start=0.0):
+    """
+    Plots column 1 vs column 0 from multiple text files starting from a given x-value.
+
+    Each file is assumed to have at least 2 numeric columns.
+    Column 0 is used for the x-axis, column 1 for the y-axis.
 
     Parameters:
         file_paths (list of str): Paths to the input text files.
-        flag (int): Which column to use for the y-axis (1, 2, or 3).
+        start (float): Minimum value of column 0 (x-axis) from which to start plotting.
 
     Raises:
-        ValueError: If the flag is not in [1, 2, 3].
+        ValueError: If the file does not contain at least 2 columns.
     """
-    if flag not in [1, 2, 3]:
-        raise ValueError("Flag must be 1, 2, or 3.")
-
     for path in file_paths:
         try:
             data = np.loadtxt(path)
-            if data.shape[1] < 4:
-                raise ValueError(f"File '{path}' does not contain 4 columns.")
-            x = data[:, 0]
-            y = data[:, flag]
+            if data.shape[1] < 2:
+                raise ValueError(f"File '{path}' does not contain at least 2 columns.")
+
+            # Filter rows based on column 0 values
+            mask = data[:, 0] >= start
+            if not np.any(mask):
+                raise ValueError(f"No data in file '{path}' with column 0 >= {start}.")
+
+            x = data[mask, 0]
+            y = data[mask, 1]
             label = os.path.basename(path)
             plt.plot(x, y, label=label)
-            #plt.scatter(x, y, label=label, s=10)  # s=10 controls marker size
+            #plt.scatter(x, y, label=label, s=10)
 
         except Exception as e:
             print(f"Error processing '{path}': {e}")
 
     plt.xlabel("Column 0 (x-axis)")
-    plt.ylabel(f"Column {flag} (y-axis)")
-    plt.title(f"Plot of Column {flag} vs Column 0")
+    plt.ylabel("Column 1 (y-axis)")
+    plt.title(f"Plot of Column 1 vs Column 0 (starting from x ≥ {start})")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
@@ -1331,8 +1094,6 @@ def show_image(X, y, index=0):
     plt.show()
 
 
-
-#TODO: studiare bene le immagini
 def extract_violet_patches(X, y, patch_size, stride):
     N, H, W, C = X.shape
     num_patches_h = (H - patch_size) // stride + 1
@@ -1425,8 +1186,7 @@ def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch
                     tf.TensorSpec(shape=(None,) + y_tr.shape[1:], dtype=y_tr.dtype)
                 )
             )
-            #TODO: repeat().prefetch(tf.data.AUTOTUNE).cache() potrebbe consumare piu memoria
-
+        #TODO sitema microbatch
         for x_batch, y_batch in dataset:
             if microbatch_size is None:
                 with tf.GradientTape() as tape:
@@ -1457,6 +1217,10 @@ def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch
             it += 1
             total_stride_loss += loss_val
             stride_loss_count += 1
+            '''if tf.config.list_physical_devices('GPU'):
+                print(f"Peak Memory: {tf.config.experimental.get_memory_info('GPU:0')['peak'] / 1024 ** 2:.1f} MB")
+            else:
+                print(f"Peak Memory: {tf.config.experimental.get_memory_info('CPU:0')['peak'] / 1024 ** 2:.1f} MB")'''
 
             # Recalculate training-only time
             current_elapsed = accumulated_elapsed_time + (time.time() - training_start_time)
@@ -1467,15 +1231,12 @@ def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch
 
             if it % prune_and_regrow_frequency == 0:
                 rho = rho0 ** (int(it / prune_and_regrow_frequency))
-                print("phi:", int(model.num_active_weights() * rho))
-                if int(model.num_active_weights() * rho) > len(model.sparse_tensors()):
+                if model.is_rho_large_enough(rho):
                     print("Prune & Regrow")
                     model.prune_and_regrow(rho, optimizer)
                     optimizer = keras.optimizers.Adam(learning_rate=float(optimizer.learning_rate.numpy()))
                     best_avg_loss = float('inf')
                     patience_counter = 0
-                    total_stride_loss = 0
-                    stride_loss_count = 0
                 else:
                     print("Prune & Regrow Aborted")
 
@@ -1485,7 +1246,7 @@ def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch
                 test_start_time = time.time()
                 accumulated_elapsed_time += (test_start_time - training_start_time)
 
-                acc_val = test(model, X_val, y_val, batch_size=32)
+                acc_val = test2(model, X_val, y_val, batch_size=32)
                 #acc_val = -1
                 test_duration = time.time() - test_start_time
 
@@ -1533,53 +1294,35 @@ def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch
 
     #log_file.close()
 
-#TODO: cambiare i nomi ai modelli
-#TODO: FAI UNA FUNZIONE SERIA load
+#TODO: resnet: recompute_gradient
+#TODO: microbarch
 def main():
 
-    file_list = ['./runs/r50.txt','./runs/r23.txt']
+    #file_list = ['./runs/r43b.txt','./runs/r50b.txt','./runs/r51b.txt','./runs/r52b.txt','./runs/r55b.txt','./runs/r45b.txt']
+    file_list = ['./runs/r68a.txt','./runs/r62a.txt']
+    #file_list = ['./runs/r67a.txt','./runs/r66a.txt']
     plot_overlapped_curves(file_list, start=0, flag= "loss")
-    #plot_column_from_files(file_list,1)
+    #plot_column_from_files(file_list,0)
     exit()
 
     if tf.config.list_physical_devices('GPU'):
-      (X_train, y_train), (X_test, y_test), (X_val, y_val) = load_bloodmnist_224()
+      (X_train, y_train), (X_test, y_test), (X_val, y_val) = load_bloodmnist_224(patching=True)
       test_frequency = 60*2.5
       batch_size = 32
-      prune_and_regrow_frequency = 10
-      microbatch_size = None
-
+      prune_and_regrow_frequency = 100
+      microbatch_size = 16
 
     else:
-        X_train, y_train = load_bloodmnist_subset()
-        X_val = X_train
-        y_val = y_train
-        test_frequency = 1
+        (X_train, y_train), (X_test, y_test), (X_val, y_val) = load_bloodmnist_subset(patching=True)
+        test_frequency = 60*2.5
         batch_size = 32
-        prune_and_regrow_frequency = 4
-        microbatch_size = None
-
-    #16->x96
-    #32->x24
-    #ricorda di cambiare il test, ricorda di cambiare initializers
-    X_train, y_train, discarded_patches, discarded_labels = extract_violet_patches(X_train, y_train, patch_size=32, stride=32)
-    #TODO: controllare
-    #indices = np.random.permutation(len(X_train))
-    #X_train = X_train[indices]
-    #y_train = y_train[indices]
-
-    '''for i in range(len(discarded_patches)):
-        show_image(discarded_patches,discarded_labels,index = i)
-    exit()'''
+        prune_and_regrow_frequency = 50
+        microbatch_size = 16
 
 
-    #model = ResNet50_sparse2(sparsity= 0.8, recompute = False)
-    #model = MobileNetTF(sparsity=0.8, recompute_gradient=True)
-    model = MobileNetTF(sparsity=0)
-    #model = MobileNetTF()
-    #model = ResNet50_original()
-    #model = ResNet50_sparse(sparsity = 0)
-    #model = MobileNet_keras()
+    # CAMBIA TEST, CAMBIA INIZIALIZZAZIONE
+    #model = MobileNet224(sparsity=0.8,recompute_gradient=True)
+    model = MobileNet32_new(sparsity=0.8,recompute_gradient=True)
 
     train(model, X_train, y_train, X_val, y_val, max_epochs=100000, max_iter=10000000, max_time=60 * 60 * 2, batch_size=batch_size,
           lr=0.001, prune_and_regrow_frequency=prune_and_regrow_frequency, test_frequency=test_frequency, patience=3, rho0=0.5,
