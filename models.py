@@ -1186,7 +1186,6 @@ def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch
                     tf.TensorSpec(shape=(None,) + y_tr.shape[1:], dtype=y_tr.dtype)
                 )
             )
-        #TODO sitema microbatch
         for x_batch, y_batch in dataset:
             if microbatch_size is None:
                 with tf.GradientTape() as tape:
@@ -1196,19 +1195,29 @@ def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch
                 optimizer.apply_gradients(zip(grads, model.trainable_variables))
                 loss_val = micro_loss.numpy()
             else:
-                microbatches = tf.data.Dataset.from_tensor_slices((x_batch, y_batch)).batch(microbatch_size)
+                '''microbatches = tf.data.Dataset.from_tensor_slices((x_batch, y_batch)).batch(microbatch_size)
                 accum_grads = [tf.zeros_like(var) for var in model.trainable_variables]
                 total_micro_loss = 0.0
                 num_microbatches = 0
 
-                for x_micro, y_micro in microbatches:
+                for x_micro, y_micro in microbatches:'''
+                accum_grads = [tf.zeros_like(var) for var in model.trainable_variables]
+                total_micro_loss = 0.0
+                batch_size_current = tf.shape(x_batch)[0]
+                num_microbatches = tf.math.ceil(batch_size_current / microbatch_size).numpy()
+
+                for i in range(0, batch_size_current, microbatch_size):
+                    end_idx = tf.minimum(i + microbatch_size, batch_size_current)
+                    x_micro = x_batch[i:end_idx]
+                    y_micro = y_batch[i:end_idx]
+
                     with tf.GradientTape() as tape:
                         preds = model(x_micro, training=True)
                         micro_loss = loss_fn(y_micro, preds)
                     grads = tape.gradient(micro_loss, model.trainable_variables)
                     accum_grads = [acc_g + g for acc_g, g in zip(accum_grads, grads)]
                     total_micro_loss += micro_loss.numpy()
-                    num_microbatches += 1
+                    #num_microbatches += 1
 
                 avg_grads = [g / num_microbatches for g in accum_grads]
                 optimizer.apply_gradients(zip(avg_grads, model.trainable_variables))
@@ -1299,7 +1308,7 @@ def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch
 def main():
 
     #file_list = ['./runs/r43b.txt','./runs/r50b.txt','./runs/r51b.txt','./runs/r52b.txt','./runs/r55b.txt','./runs/r45b.txt']
-    file_list = ['./runs/r68a.txt','./runs/r62a.txt']
+    file_list = ['./runs/r45a.txt','./runs/r69a.txt']
     #file_list = ['./runs/r67a.txt','./runs/r66a.txt']
     plot_overlapped_curves(file_list, start=0, flag= "loss")
     #plot_column_from_files(file_list,0)
@@ -1307,9 +1316,9 @@ def main():
 
     if tf.config.list_physical_devices('GPU'):
       (X_train, y_train), (X_test, y_test), (X_val, y_val) = load_bloodmnist_224(patching=True)
-      test_frequency = 60*2.5
+      test_frequency = 10000000#60*2.5
       batch_size = 32
-      prune_and_regrow_frequency = 100
+      prune_and_regrow_frequency = np.inf
       microbatch_size = 16
 
     else:
@@ -1322,9 +1331,9 @@ def main():
 
     # CAMBIA TEST, CAMBIA INIZIALIZZAZIONE
     #model = MobileNet224(sparsity=0.8,recompute_gradient=True)
-    model = MobileNet32_new(sparsity=0.8,recompute_gradient=True)
+    model = MobileNet32(sparsity=0,recompute_gradient=False)
 
-    train(model, X_train, y_train, X_val, y_val, max_epochs=100000, max_iter=10000000, max_time=60 * 60 * 2, batch_size=batch_size,
+    train(model, X_train, y_train, X_val, y_val, max_epochs=100000, max_iter=10000000, max_time=60 * 5, batch_size=batch_size,
           lr=0.001, prune_and_regrow_frequency=prune_and_regrow_frequency, test_frequency=test_frequency, patience=3, rho0=0.5,
           microbatch_size=microbatch_size)
 
