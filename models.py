@@ -19,7 +19,6 @@ tf.random.set_seed(SEED)
 np.random.seed(SEED)
 random.seed(SEED)
 
-
 class SparseModel(tf.Module):
     def __init__(self, name=None):
         super().__init__(name=name)
@@ -387,9 +386,7 @@ class SparseTensor(tf.Module):
     def to_tf_dense(self):
         #from tensorflow.python.ops.gen_sparse_ops import sparse_to_dense
         #return tf.sparse.to_dense(self.to_tf_sparse())
-        #TODO: default_value=tf.constant(0.0) per half precision?
-        #TODO: validation_indices = False
-        return sparse_to_dense(self.indices,self.shape,self.values,default_value=tf.constant(0.0),validate_indices=True)
+        return sparse_to_dense(self.indices,self.shape,self.values,default_value=tf.constant(0.0),validate_indices=False)
 
     def prune(self, rho):
         '''
@@ -600,7 +597,6 @@ class ResNet(SparseModel):
         else:
             return head(x)
 
-
 class MobileNet224(SparseModel):
     class ConvBlock(tf.Module):
         def __init__(self, in_channels, out_channels, stride, sparsity, recompute_gradient=False, name=None):
@@ -684,7 +680,6 @@ class MobileNet224(SparseModel):
             return tf.recompute_grad(head)(x)
         else:
             return head(x)
-
 
 class MobileNet32(SparseModel):
     class ConvBlock(tf.Module):
@@ -957,13 +952,7 @@ def sparse_to_dense_depthwise_conv2d(input, sp_filter, strides, padding='SAME'):
     return tf.nn.depthwise_conv2d(input,dense_filter,strides,padding)
 
 def sparse_to_dense_matmul(X,Y_sp):
-    '''
-    Y_dense = sparse_to_dense(Y_sp.indices, Y_sp.shape,Y_sp.values,
-                        default_value=0,
-                        validate_indices=True)
-    '''
     Y_dense = Y_sp.to_tf_dense()
-    #TODO: b_is_sparse = True dà risultati diversi -- forse gli indici non sono corretti
     return tf.matmul(X, Y_dense, b_is_sparse=False)
 
 def plot_overlapped_curves_old(file_list, start=0):
@@ -1308,9 +1297,9 @@ def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch
 def main():
 
     #file_list = ['./runs/r43b.txt','./runs/r50b.txt','./runs/r51b.txt','./runs/r52b.txt','./runs/r55b.txt','./runs/r45b.txt']
-    file_list = ['./runs/r45a.txt','./runs/r69a.txt']
+    file_list = ['./runs/r36.txt','./runs/r69a.txt']
     #file_list = ['./runs/r67a.txt','./runs/r66a.txt']
-    plot_overlapped_curves(file_list, start=0, flag= "loss")
+    plot_overlapped_curves(file_list, start=0, flag= "acc")
     #plot_column_from_files(file_list,0)
     exit()
 
