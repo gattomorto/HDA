@@ -1,0 +1,174 @@
+--------------------------------------MOBILE NET 32 ------------------------------------------------------------
+r20***
+32x32
+model = MobileNetTF(sparsity=0)
+max_iter = 130000
+train(model,
+       X_train,
+       y_train,
+       X_val,
+       y_val,
+       epochs = 1000,
+       max_iter = max_iter,
+       max_time = 60*60,
+       batch_size = 32,
+       lr = 0.001,
+       patience = 3,
+       prune_and_regrow_stride = np.inf,
+       test_stride = 500,
+       rho0 = 0.5,
+       microbatch_size = None
+       )
+
+r21
+come r20 ma con lr = 0.01, è meglio r20
+model = MobileNetTF(sparsity=0)
+max_iter = 130000
+
+
+r36/r64a***
+mobile net 32x32 -- con xavier initialization -- loss è identico a r20 ma accuracy è meglio
+
+r37
+test_stride ora è tempo e volevo vedere se i risultati coincidevano ancora
+
+r39:
+sp = 0.8, p&r frequency = 50 (no microbatch)
+
+r40:
+sp = 0.95, p&r frequency = 50
+
+r38: mobile net 32x32 (sp = 0)
+r41: mobile net 32x32 (sp = 0.8) p&r=50
+r44: mobile net 32x32 (sp = 0.8) p&r=50 recompute (no microbatch)
+
+r70: tutto con microbath nuovo e test nuovi
+
+
+--------------------------------------MOBILE NET 32 NEW 5 layers------------------------------------------------------------
+r62: con tutto e xavier -- fa molto peggio rispetto a mobile net 32 classico
+r63: mobilenet32new base -- fa peggior rispetto a mb32 classicp
+r68:
+
+
+--------------------------------------MOBILE NET 32 NEW 2 layers------------------------------------------------------------
+r65: versione base: sembra equivalente a layers = 0
+r66/67: con tutto anche microbatch, ma versione con 0 layers sembra meglio
+
+-------------------------------------------RESNET--------------------------------------------------------------
+r22
+qui per sbaglio microbatch non è None
+model = ResNet50_sparse2(sparsity= 0, recompute = False)
+max_iter = 130000
+train(model,
+       X_train,
+       y_train,
+       X_val,
+       y_val,
+       epochs = 1000,
+       max_iter = max_iter,
+       max_time = 60*60,
+       batch_size = 32,
+       lr = 0.001,
+       patience = 3,
+       prune_and_regrow_stride = np.inf,
+       test_stride = 100,
+       rho0 = 0.5,
+       microbatch_size = 16
+       )
+
+r23*** (tf base)
+    model = ResNet50_original()
+    max_iter = 130000
+    train(model,
+           X_train,
+           y_train,
+           X_val,
+           y_val,
+           epochs = 1000,
+           max_iter = max_iter,
+           max_time = 60*60,
+           batch_size = 32,
+           lr = 0.001,
+           patience = 3,
+           prune_and_regrow_stride = np.inf,
+           test_stride = 100,
+           rho0 = 0.5,
+           microbatch_size = None
+           )
+
+
+
+r28 resnet sparse base
+faccio inizializzazione henormal e xavier per fc -- fa peggio
+
+r29*** resnet sparse base
+henormal per tutto -- come versione originale--ok ora è simile
+
+r30*** resnet p&r
+(resnet checkpointed and prune and regrow) con SparseTensor nuovo -- ok simile alla versione base (hernormal tutto)
+
+r34 resnet p&r
+xavier per filtri e henormal dense
+peggio rispetto a 30
+
+r35 resnet p&r
+xavier per filtri e dense???
+peggio rispetto a 30
+
+r42 resnet p&r
+tutto xavier
+mi sembra peggrio rispetto a 30
+
+r43a*** resnet p&r (2h)
+tutto hernormal, ma è peggio rispetto a 30
+
+r46: p&r = 10
+
+r47: p&r = 30
+
+r48: p&r = 50
+
+r49: p&r = 100 (2h)
+
+r50: p&r = 10 (2h)
+
+--------------------------------------------MOBILE NET 224----------------------------------------------------------------------
+
+r31
+mobile net keras
+
+r32
+mobile net sp=0 p&r (henormal) -- è un po peggio di r31
+
+r33***
+mobile net sp=0  p&r, xavier -- loss sembra un po peggio di 31, ma accuracy è molto meglio, inoltre è piu veloce
+
+r53 2(h)
+sparsity = 0.8, p&r = 50, recompute grad
+
+r54 2(h) megglio questo rispetto a 53
+sparsity = 0.8, p&r = 10, recompute grad
+
+------------------------------------------------------------------------------------------------------------
+
+##########################################################################
+##########################################################################
+###################### 2h training, test ogni 60*2.5 #####################
+##########################################################################
+##########################################################################
+forse bisogna aumentare patience per resnet -- è scattato a 0.7955607771873474
+
+r43: resnet
+r50: resnet (sp = 0.8) p&r = 10
+r51: resnet (sp = 0.8) p&r = 10, recompute
+r52: resnet (sp = 0.8) p&r = 10, recompute, micro=16
+
+r55: mobile net 224x224 p&r = 10, recompute, micro=16
+
+r45: mobile net 32x32 (sp = 0.8) p&r=50 recompute, microbatch (microbatch vecchio)
+--------------------------------------------------------------------------
+
+
+
+

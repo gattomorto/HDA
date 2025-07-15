@@ -144,13 +144,13 @@ class SparseModel(tf.Module):
                 return
 
     def prune_and_regrow(self,rho,optimizer):
-        print(f"rho: {rho}")
+        #print(f"rho: {rho}")
         self.update_mean_momentums(optimizer)
         self.reset_prune_and_regrow_stats()
         num_pruned = self.prune(rho)
-        print(self.prune_summary())
+        #print(self.prune_summary())
         self.regrow(num_pruned)
-        print(self.regrow_summary())
+        #print(self.regrow_summary())
 
     def reset_prune_and_regrow_stats(self):
         for t in self.sparse_tensors():
@@ -747,76 +747,7 @@ class MobileNet32(SparseModel):
 
         return tf.recompute_grad(head)(x) if self.recompute else head(x)
 
-class MobileNet32_new(SparseModel):
-    class ConvBlock(tf.Module):
-        def __init__(self, in_channels, out_channels, stride, sparsity, recompute_gradient=False, name=None):
-            super().__init__(name=name)
-            self.stride = stride
-            self.recompute = recompute_gradient
-            self.conv_weights = SparseTensor([3, 3, in_channels, out_channels], sparsity, name="conv")
-            self.bn = keras.layers.BatchNormalization()
-        def __call__(self, x, training=False):
-            def forward(x):
-                x = sparse_to_dense_conv2d(x, self.conv_weights, self.stride, padding="SAME")
-                x = self.bn(x, training=training)
-                return tf.nn.relu6(x)
-            return tf.recompute_grad(forward)(x) if self.recompute else forward(x)
 
-    class DepthwiseConvBlock(tf.Module):
-        def __init__(self, in_channels, out_channels, stride, sparsity, recompute_gradient=False, name=None):
-            super().__init__(name=name)
-            self.strides = [1, stride, stride, 1]
-            self.recompute = recompute_gradient
-            self.dw_weights = SparseTensor([3, 3, in_channels, 1], sparsity, name="dw_weights")
-            self.pw_weights = SparseTensor([1, 1, in_channels, out_channels], sparsity, name="pw_weights")
-            self.bn1 = keras.layers.BatchNormalization()
-            self.bn2 = keras.layers.BatchNormalization()
-
-        def __call__(self, x, training=False):
-            def forward(x):
-                x = sparse_to_dense_depthwise_conv2d(x, self.dw_weights, self.strides, padding="SAME")
-                x = self.bn1(x, training=training)
-                x = tf.nn.relu6(x)
-                x = sparse_to_dense_conv2d(x, self.pw_weights, stride=1, padding="SAME")
-                x = self.bn2(x, training=training)
-                return tf.nn.relu6(x)
-            return tf.recompute_grad(forward)(x) if self.recompute else forward(x)
-
-    def __init__(self, sparsity, num_classes=8, recompute_gradient=False, name=None):
-        super().__init__(name=name)
-        self.recompute = recompute_gradient
-        self.blocks = []
-
-        # Blocks for 32x32 input resolution
-        self.blocks.append(MobileNet32_new.ConvBlock(3, 32, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="conv1"))
-        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(32, 64, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw1"))
-        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(64, 128, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw2"))  # 32→16
-        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(128, 128, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw3"))
-        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(128, 256, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw4"))  # 16→8
-        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(256, 256, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw5"))
-        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(256, 512, stride=2, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw6"))  # 8→4
-
-
-        for i in range(2):
-            self.blocks.append(MobileNet32_new.DepthwiseConvBlock(512, 512, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name=f"dw7_{i}"))
-
-
-        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(512, 1024, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw8"))
-        self.blocks.append(MobileNet32_new.DepthwiseConvBlock(1024, 1024, stride=1, sparsity=sparsity, recompute_gradient=recompute_gradient, name="dw9"))
-
-        self.global_pool = keras.layers.GlobalAveragePooling2D()
-        self.dense_weights = SparseTensor([1024, num_classes], sparsity, name="dense")
-        self.dense_bias = tf.Variable(tf.zeros([num_classes]), trainable=True, name="dense_bias")
-    def __call__(self, x, training=False):
-        for block in self.blocks:
-            x = block(x, training=training)
-
-        def head(x):
-            x = self.global_pool(x)
-            x = sparse_to_dense_matmul(x, self.dense_weights) + self.dense_bias
-            return tf.nn.softmax(x)
-
-        return tf.recompute_grad(head)(x) if self.recompute else head(x)
 
 
 #############################################################################################################
@@ -936,10 +867,6 @@ def test2(model, X, y, patch_size=32, stride=16, batch_size=32):
     accuracy = np.mean(predicted_classes[has_violet] == true_classes[has_violet])
     return accuracy
 
-def test3(model, X, y, batch_size=2000):
-    for i in range(100000000):
-        j = 0
-        j = j+1
 
 def sparse_to_dense_conv2d(input, sp_filter, stride=1, padding='SAME'):
     #dense_filter = tf.sparse.to_dense(sp_filter.to_tf_sparse())
@@ -1140,14 +1067,14 @@ def extract_violet_patches(X, y, patch_size, stride):
 
     return retained_patches, retained_labels, discarded_patches, discarded_labels
 
-def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch_size, lr,
+def train(model, X_tr, y_tr, X_val, y_val,X_test, y_test, max_epochs, max_iter, max_time, batch_size, lr,
           prune_and_regrow_frequency, test_frequency, patience, rho0, microbatch_size):
 
     def data_generator(X, y, batch_size):
         for i in range(0, len(X), batch_size):
             yield X[i:i + batch_size], y[i:i + batch_size]
 
-    log_file1 = open("training_log1.txt", 'a')
+    #log_file1 = open("training_log1.txt", 'a')
     log_file2 = open("training_log2.txt", 'a')
     optimizer = keras.optimizers.Adam(learning_rate=lr)
     loss_fn = keras.losses.CategoricalCrossentropy(from_logits=False)
@@ -1222,10 +1149,10 @@ def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch
 
             # Recalculate training-only time
             current_elapsed = accumulated_elapsed_time + (time.time() - training_start_time)
-            if it % 1 == 0:
+            '''if it % 1 == 0:
                 #print(f"E: {epoch}, Num Tests: {num_tests}, lr: {optimizer.learning_rate.numpy()},  Best Loss: {best_avg_loss}, Best Acc: {best_acc_val}, Step {it}, Loss: {loss_val}, Elapsed: {current_elapsed}")
                 log_file1.write(f"{current_elapsed} {loss_val} {best_acc_val}\n")
-                log_file1.flush()
+                log_file1.flush()'''
 
             if it % prune_and_regrow_frequency == 0:
                 rho = rho0 ** (int(it / prune_and_regrow_frequency))
@@ -1244,14 +1171,14 @@ def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch
                 test_start_time = time.time()
                 accumulated_elapsed_time += (test_start_time - training_start_time)
 
-                acc_val = test2(model, X_val, y_val, batch_size=32)
+                #acc_val = test2(model, X_val, y_val, batch_size=32)
+                acc_val = test2(model, X_test, y_test, batch_size=32)
                 #acc_val = -1
                 test_duration = time.time() - test_start_time
 
                 # Update test time and resume training clock
                 last_test_training_time += test_frequency
                 training_start_time = time.time()
-
 
                 num_tests += 1
 
@@ -1293,21 +1220,20 @@ def train(model, X_tr, y_tr, X_val, y_val, max_epochs, max_iter, max_time, batch
     #log_file.close()
 
 #TODO: resnet: recompute_gradient
-#TODO: microbarch
 def main():
 
     #file_list = ['./runs/r43b.txt','./runs/r50b.txt','./runs/r51b.txt','./runs/r52b.txt','./runs/r55b.txt','./runs/r45b.txt']
-    file_list = ['./runs/r36.txt','./runs/r69a.txt']
+    file_list = ['./runs/r45a.txt','./runs/r78a.txt']
     #file_list = ['./runs/r67a.txt','./runs/r66a.txt']
-    plot_overlapped_curves(file_list, start=0, flag= "acc")
+    plot_overlapped_curves(file_list, start=0, flag= "loss")
     #plot_column_from_files(file_list,0)
     exit()
 
     if tf.config.list_physical_devices('GPU'):
       (X_train, y_train), (X_test, y_test), (X_val, y_val) = load_bloodmnist_224(patching=True)
-      test_frequency = 10000000#60*2.5
+      test_frequency = 60*2.5
       batch_size = 32
-      prune_and_regrow_frequency = np.inf
+      prune_and_regrow_frequency = 50
       microbatch_size = 16
 
     else:
@@ -1320,9 +1246,9 @@ def main():
 
     # CAMBIA TEST, CAMBIA INIZIALIZZAZIONE
     #model = MobileNet224(sparsity=0.8,recompute_gradient=True)
-    model = MobileNet32(sparsity=0,recompute_gradient=False)
+    model = MobileNet32(sparsity=0.8, recompute_gradient=True)
 
-    train(model, X_train, y_train, X_val, y_val, max_epochs=100000, max_iter=10000000, max_time=60 * 5, batch_size=batch_size,
+    train(model, X_train, y_train, X_val, y_val, X_test, y_test, max_epochs=100000, max_iter=10000000, max_time=60* 60* 2, batch_size=batch_size,
           lr=0.001, prune_and_regrow_frequency=prune_and_regrow_frequency, test_frequency=test_frequency, patience=3, rho0=0.5,
           microbatch_size=microbatch_size)
 
