@@ -169,6 +169,8 @@ r55: mobile net 224x224 p&r = 10, recompute, micro=16
 r45: mobile net 32x32 (sp = 0.8) p&r=50 recompute, microbatch (microbatch vecchio)
 --------------------------------------------------------------------------
 
+mobile net 32x32 (sp = 0.8) p&r=50 recompute, microbatch
+r79
 
 
 
