@@ -1230,6 +1230,7 @@ def main():
     exit()
 
     if tf.config.list_physical_devices('GPU'):
+      from google.colab import files
       (X_train, y_train), (X_test, y_test), (X_val, y_val) = load_bloodmnist_224(patching=True)
       test_frequency = 60*2.5
       batch_size = 32
@@ -1251,6 +1252,10 @@ def main():
     train(model, X_train, y_train, X_val, y_val, X_test, y_test, max_epochs=100000, max_iter=10000000, max_time=60* 60* 2, batch_size=batch_size,
           lr=0.001, prune_and_regrow_frequency=prune_and_regrow_frequency, test_frequency=test_frequency, patience=3, rho0=0.5,
           microbatch_size=microbatch_size)
+
+    if tf.config.list_physical_devices('GPU'):
+        files.download('training_log2.txt')
+
 
 if __name__ == '__main__':
     main()
