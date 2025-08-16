@@ -189,16 +189,20 @@ r88
 r89
 r90
 
+
 resnet (sp = 0.8) p&r = 10 (test batch = 100)
 r91
 r92
 r93
+r99
+r100
 
 resnet
 r94
 r95
 r96
-
+r97
+r98
 
 
 
